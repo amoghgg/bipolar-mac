@@ -164,15 +164,6 @@ function makePane({ id, section, name, path }) {
   term.attachCustomKeyEventHandler((e) => keyHandler(p, e));
   el.addEventListener('mousedown', () => focusPane(id), true);
 
-  // Drag files in → paste their shell-escaped paths (Claude reads image paths this way).
-  el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drop'); });
-  el.addEventListener('dragleave', () => el.classList.remove('drop'));
-  el.addEventListener('drop', (e) => {
-    e.preventDefault();
-    el.classList.remove('drop');
-    const paths = [...e.dataTransfer.files].map((f) => sb.pathForFile(f)).filter(Boolean);
-    if (paths.length) { term.paste(paths.map(shq).join(' ') + ' '); term.focus(); }
-  });
   el.addEventListener('contextmenu', (e) => { e.preventDefault(); paneMenu(p); });
   return p;
 }
@@ -1179,6 +1170,44 @@ $('#sash').addEventListener('mousedown', (e) => {
   };
   window.addEventListener('mousemove', move);
   window.addEventListener('mouseup', up);
+});
+
+// ------------------------------------------------------------------ drag & drop
+// Drop files anywhere: their shell-escaped paths are pasted into the pane under the
+// pointer (or the focused one), the way Terminal does it. Claude reads image paths this way.
+function droppedPaths(dt) {
+  let paths = [...(dt.files || [])].map((f) => { try { return sb.pathForFile(f); } catch { return ''; } }).filter(Boolean);
+  if (!paths.length) {
+    paths = (dt.getData('text/uri-list') || '').split(/\r?\n/)
+      .filter((u) => u.startsWith('file://'))
+      .map((u) => decodeURIComponent(new URL(u).pathname));
+  }
+  return paths;
+}
+let dropTarget = null;
+const paneAt = (e) => panes.get(document.elementFromPoint(e.clientX, e.clientY)?.closest('.pane')?.dataset.pane) || focusedPane();
+function markDrop(p) {
+  if (dropTarget === p) return;
+  dropTarget?.el.classList.remove('drop');
+  dropTarget = p;
+  p?.el.classList.add('drop');
+}
+document.addEventListener('dragover', (e) => {
+  if (![...e.dataTransfer.types].some((t) => t === 'Files' || t === 'text/uri-list')) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+  markDrop(paneAt(e));
+});
+document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) markDrop(null); });
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const p = paneAt(e);
+  markDrop(null);
+  const paths = droppedPaths(e.dataTransfer);
+  if (!p || !paths.length) return;
+  revealPane(p.id);
+  p.term.paste(paths.map(shq).join(' ') + ' ');
+  p.term.focus();
 });
 
 // ------------------------------------------------------------------ boot
