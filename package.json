@@ -1,0 +1,31 @@
+{
+  "name": "switchboard",
+  "productName": "Switchboard",
+  "version": "0.1.0",
+  "description": "Terminal workspace with separate Office and Personal sections",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "package": "electron-packager . Switchboard --platform=darwin --arch=arm64 --overwrite --out=dist --icon=build/icon.icns --app-bundle-id=com.amoghbajpai.switchboard --no-asar --ignore=^/dist --ignore=^/\\.git && rm -rf /Applications/Switchboard.app && cp -R dist/Switchboard-darwin-arm64/Switchboard.app /Applications/",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper"
+  },
+  "dependencies": {
+    "@xterm/addon-clipboard": "^0.2.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/headless": "^6.0.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "@electron/rebuild": "^4.2.0",
+    "electron": "^44.5.1"
+  }
+}

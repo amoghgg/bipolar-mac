@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:" />
+  <title>Switchboard</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-section="office" class="booting">
+  <div id="app">
+    <aside id="sidebar">
+      <div class="titlebar-space drag"></div>
+
+      <div id="switch" role="tablist" aria-label="Workspace">
+        <div class="pill" aria-hidden="true"></div>
+        <button data-section="office" role="tab">
+          <svg viewBox="0 0 20 20"><path d="M3.5 17V5.2c0-.6.4-1 1-1.1l6-1.6c.6-.2 1.2.3 1.2 1V17M11.7 8h3.8c.6 0 1 .4 1 1v8M2 17h16M6.5 7.5h2M6.5 10.5h2M6.5 13.5h2"/></svg>
+          <span>Office</span><b class="count"></b>
+        </button>
+        <button data-section="personal" role="tab">
+          <svg viewBox="0 0 20 20"><path d="M3 9.2 10 3l7 6.2M5 7.6V17h10V7.6M8.2 17v-4.2c0-.5.4-1 1-1h1.6c.6 0 1 .5 1 1V17"/></svg>
+          <span>Personal</span><b class="count"></b>
+        </button>
+      </div>
+
+      <button id="search" class="search">
+        <svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 3.3 3.3"/></svg>
+        <span>Jump to anything</span>
+        <kbd>⌘P</kbd>
+      </button>
+
+      <div id="scroller">
+        <section id="attention" hidden>
+          <h2>Waiting on you <span class="n"></span></h2>
+          <ul></ul>
+        </section>
+
+        <section id="projects-wrap">
+          <h2>
+            <span id="projects-title">Projects</span>
+            <button id="add" class="icon-btn" title="Add a project folder">
+              <svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg>
+            </button>
+          </h2>
+          <ul id="projects"></ul>
+        </section>
+      </div>
+
+      <footer class="side-foot">
+        <button id="home-shell" class="ghost">
+          <svg viewBox="0 0 20 20"><path d="m4 6 4 4-4 4M10 14.5h6"/></svg>Home shell
+        </button>
+        <button id="settings-btn" class="icon-btn" title="Settings (⌘,)">
+          <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4M15.3 15.3l-1.4-1.4M6.1 6.1 4.7 4.7"/></svg>
+        </button>
+      </footer>
+    </aside>
+
+    <div id="sash" title="Drag to resize"></div>
+
+    <main id="stage">
+      <header id="tabbar" class="drag">
+        <div id="tabs"></div>
+        <div class="tab-actions">
+          <button id="new-tab" class="icon-btn" title="New tab (⌘T)">
+            <svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg>
+          </button>
+          <button id="split-btn" class="icon-btn" title="Split right (⌘D) · Split down (⇧⌘D)">
+            <svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2.5"/><path d="M10 4v12"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="card">
+        <div id="views"></div>
+        <div id="empty">
+          <div class="orb"><i></i></div>
+          <h1 id="empty-title">Office is quiet</h1>
+          <p>Open a project from the sidebar to start a shell, or start Claude in one.</p>
+          <div class="empty-actions">
+            <button id="empty-claude" class="primary"><svg viewBox="0 0 20 20"><path d="M10 2.5 11.6 8.4 17.5 10l-5.9 1.6L10 17.5l-1.6-5.9L2.5 10l5.9-1.6z"/></svg>New Claude session</button>
+            <button id="empty-palette" class="secondary">Jump to a project <kbd>⌘P</kbd></button>
+          </div>
+        </div>
+        <footer id="statusbar">
+          <div class="left"><span id="sb-path"></span><span id="sb-branch"></span><span id="sb-claude"></span></div>
+          <div class="right"><span id="sb-sessions"></span></div>
+        </footer>
+      </div>
+    </main>
+  </div>
+
+  <div id="palette" class="overlay" hidden>
+    <div class="sheet" role="dialog" aria-label="Jump to anything">
+      <div class="palette-input">
+        <svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 3.3 3.3"/></svg>
+        <input id="palette-q" placeholder="Search projects, sessions and commands" autocomplete="off" spellcheck="false" />
+        <kbd>esc</kbd>
+      </div>
+      <ul id="palette-list"></ul>
+      <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>⌥↵</kbd> open with Claude</span></div>
+    </div>
+  </div>
+
+  <div id="settings" class="overlay" hidden>
+    <div class="sheet narrow" role="dialog" aria-label="Settings">
+      <header><h3>Settings</h3><button class="icon-btn close" data-close><svg viewBox="0 0 20 20"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg></button></header>
+      <div class="rows">
+        <label class="set-row"><div><b>Text size</b><small>Applies to every terminal.</small></div>
+          <div class="stepper"><button data-font="-1">−</button><output id="set-font">13</output><button data-font="1">+</button></div></label>
+        <label class="set-row"><div><b>Option key acts as Meta</b><small>Needed for Claude shortcuts like ⌥↵ and ⌥P. Turn off to type characters like ©.</small></div>
+          <input type="checkbox" id="set-meta" class="toggle" /></label>
+        <label class="set-row"><div><b>Notifications</b><small>Tell me when Claude finishes or needs permission in a session I'm not looking at.</small></div>
+          <input type="checkbox" id="set-notify" class="toggle" /></label>
+        <div class="set-row stacked"><div><b>Precise Claude status</b><small id="hooks-state"></small></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirm" class="overlay" hidden>
+    <div class="sheet narrow" role="alertdialog">
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-body"></p>
+      <div class="confirm-actions"><button class="secondary" data-no>Cancel</button><button class="danger" data-yes></button></div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
+  <script src="../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
+  <script src="../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
+  <script src="../node_modules/@xterm/addon-clipboard/lib/addon-clipboard.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

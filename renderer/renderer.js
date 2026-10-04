@@ -1,0 +1,1238 @@
+/* global Terminal, FitAddon, WebLinksAddon, WebglAddon, Unicode11Addon, SearchAddon, ClipboardAddon */
+'use strict';
+
+// `sb` is the bridge exposed by preload.js (window.sb).
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const SECTIONS = ['office', 'personal'];
+const LABEL = { office: 'Office', personal: 'Personal' };
+
+const ICON = {
+  spark: '<svg viewBox="0 0 20 20"><path d="M10 2.5 11.6 8.4 17.5 10l-5.9 1.6L10 17.5l-1.6-5.9L2.5 10l5.9-1.6z"/></svg>',
+  prompt: '<svg viewBox="0 0 20 20"><path d="m4.5 6 4 4-4 4M10.5 14.5h5"/></svg>',
+  x: '<svg viewBox="0 0 20 20"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>',
+  up: '<svg viewBox="0 0 20 20"><path d="m5 12.5 5-5 5 5"/></svg>',
+  down: '<svg viewBox="0 0 20 20"><path d="m5 7.5 5 5 5-5"/></svg>',
+  folder: '<svg viewBox="0 0 20 20"><path d="M2.5 6.2c0-1 .8-1.7 1.7-1.7h3.3l1.8 1.9h6.5c1 0 1.7.7 1.7 1.7v6.5c0 1-.8 1.7-1.7 1.7H4.2c-1 0-1.7-.8-1.7-1.7z"/></svg>',
+  split: '<svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2.5"/><path d="M10 4v12"/></svg>',
+  splitd: '<svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2.5"/><path d="M3 10h14"/></svg>',
+  swap: '<svg viewBox="0 0 20 20"><path d="M4 7h11l-3-3M16 13H5l3 3"/></svg>',
+  gear: '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4M15.3 15.3l-1.4-1.4M6.1 6.1 4.7 4.7"/></svg>',
+  plus: '<svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg>',
+  side: '<svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2.5"/><path d="M8 4v12"/></svg>',
+  power: '<svg viewBox="0 0 20 20"><path d="M10 3v6M6 5.6a6 6 0 1 0 8 0"/></svg>',
+};
+
+// Avatar tints: cool family for Office, warm family for Personal.
+const TINTS = {
+  office: ['#0866ff', '#1b74e4', '#00a3c4', '#3b5bdb', '#0f8a7e', '#5b6bf5', '#1877f2', '#2a9d8f'],
+  personal: ['#8f4bff', '#d6378c', '#f05a28', '#b23cd9', '#e0486b', '#7b5cff', '#f2994a', '#c2410c'],
+};
+
+const THEME = {
+  background: '#131415', foreground: '#e4e6eb', cursor: '#e4e6eb', cursorAccent: '#131415',
+  selectionBackground: 'rgba(69, 153, 255, 0.32)', selectionInactiveBackground: 'rgba(255,255,255,0.12)',
+  scrollbarSliderBackground: 'rgba(255,255,255,0.12)', scrollbarSliderHoverBackground: 'rgba(255,255,255,0.2)',
+  black: '#242526', red: '#f3425f', green: '#45bd62', yellow: '#f7b928', blue: '#4599ff',
+  magenta: '#b77cff', cyan: '#2abba7', white: '#cfd1d5',
+  brightBlack: '#6b6e73', brightRed: '#ff6b81', brightGreen: '#6bd685', brightYellow: '#ffd25c',
+  brightBlue: '#73b3ff', brightMagenta: '#cfa2ff', brightCyan: '#5fd8c6', brightWhite: '#ffffff',
+};
+
+// ------------------------------------------------------------------ state
+let cfg;
+let env;
+let active = 'office';
+let windowFocused = true;
+const tabs = [];            // {id, section, name, path, root, focus}
+const panes = new Map();    // id -> pane
+const current = { office: null, personal: null }; // tab id per section
+const git = {};             // path -> {branch, dirty, ahead, behind}
+
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const isClaudeProc = (p) => p === 'claude' || /^\d+\.\d+\.\d+/.test(p || '');
+const tabOf = (paneId) => tabs.find((t) => leaves(t.root).includes(paneId));
+const currentTab = () => tabs.find((t) => t.id === current[active]);
+const focusedPane = () => { const t = currentTab(); return t && panes.get(t.focus); };
+
+function hash(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
+function tint(section, name) { const l = TINTS[section] || TINTS.office; return l[hash(name) % l.length]; }
+function initial(name) { return (name.replace(/^[^a-z0-9]+/i, '')[0] || '~').toUpperCase(); }
+function ago(ts) {
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 60) return 'now';
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  return `${Math.floor(s / 3600)}h`;
+}
+
+// ------------------------------------------------------------------ persistence
+const persist = debounce(() => {
+  const ser = (n) => (n.k === 'pane'
+    ? { k: 'pane', id: n.id, ...paneRecord(panes.get(n.id)) }
+    : { k: 'split', dir: n.dir, r: n.r, a: ser(n.a), b: ser(n.b) });
+  cfg.session = {
+    active,
+    current: { ...current },
+    tabs: tabs.map((t) => ({ id: t.id, section: t.section, name: t.name, path: t.path, focus: t.focus, root: ser(t.root) })),
+  };
+  sb.saveConfig(cfg);
+}, 300);
+
+function paneRecord(p) {
+  if (!p) return {};
+  return { path: p.path, name: p.name, claudeSession: p.claudeSession || null, wasClaude: !!p.claudeRunning };
+}
+
+// ------------------------------------------------------------------ layout tree helpers
+function leaves(n) { return !n ? [] : n.k === 'pane' ? [n.id] : [...leaves(n.a), ...leaves(n.b)]; }
+function replaceNode(root, id, fn) {
+  if (root.k === 'pane') return root.id === id ? fn(root) : root;
+  return { ...root, a: replaceNode(root.a, id, fn), b: replaceNode(root.b, id, fn) };
+}
+function removeLeaf(root, id) {
+  if (root.k === 'pane') return root.id === id ? null : root;
+  const a = removeLeaf(root.a, id);
+  const b = removeLeaf(root.b, id);
+  if (!a) return b;
+  if (!b) return a;
+  return { ...root, a, b };
+}
+
+// ------------------------------------------------------------------ panes (terminals)
+function makePane({ id, section, name, path }) {
+  const host = document.createElement('div');
+  host.className = 'term-host';
+  const el = document.createElement('div');
+  el.className = 'pane';
+  el.dataset.pane = id;
+  el.appendChild(host);
+
+  const term = new Terminal({
+    fontFamily: cfg.ui.fontFamily,
+    fontSize: cfg.ui.fontSize,
+    lineHeight: 1.18,
+    letterSpacing: 0,
+    cursorBlink: true,
+    cursorStyle: 'bar',
+    cursorWidth: 2,
+    allowProposedApi: true,
+    macOptionIsMeta: cfg.ui.optionIsMeta,
+    macOptionClickForcesSelection: true,
+    rightClickSelectsWord: false,
+    scrollback: 10000,
+    smoothScrollDuration: 0,
+    minimumContrastRatio: 1,
+    drawBoldTextInBrightColors: false,
+    theme: THEME,
+  });
+  const fit = new FitAddon.FitAddon();
+  const search = new SearchAddon.SearchAddon();
+  term.loadAddon(fit);
+  term.loadAddon(search);
+  const u11 = new Unicode11Addon.Unicode11Addon();
+  term.loadAddon(u11);
+  term.unicode.activeVersion = '11';
+  term.loadAddon(new ClipboardAddon.ClipboardAddon()); // OSC 52 copy, as in iTerm2
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => { if (e.metaKey) sb.openExternal(uri); }, {
+    hover: (e, uri) => { host.title = `⌘-click to open ${uri}`; },
+    leave: () => { host.title = ''; },
+  }));
+  term.open(host);
+
+  const p = {
+    id, section, name, path, term, fit, search, el, host,
+    restoring: false, exited: false,
+    proc: null, claudeRunning: false, claudeSession: null, title: '',
+    state: 'shell', unread: null, hook: null, message: '',
+    lastOut: 0, lastIn: 0, claudeSince: 0, workStart: 0, webgl: null, visible: false,
+  };
+  panes.set(id, p);
+
+  term.onData((d) => { p.lastIn = Date.now(); sb.write(id, d); });
+  term.onBinary((d) => sb.write(id, d));
+  term.onResize(({ cols, rows }) => { if (!p.restoring) sb.resize(id, cols, rows); });
+  term.onTitleChange((t) => { p.title = cleanTitle(t); renderTabs(); renderStatus(); });
+  term.onBell(() => {
+    if (p.claudeRunning && !isSeen(p)) setUnread(p, 'waiting', 'Claude needs your attention');
+  });
+
+  term.attachCustomKeyEventHandler((e) => keyHandler(p, e));
+  el.addEventListener('mousedown', () => focusPane(id), true);
+
+  // Drag files in → paste their shell-escaped paths (Claude reads image paths this way).
+  el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drop'); });
+  el.addEventListener('dragleave', () => el.classList.remove('drop'));
+  el.addEventListener('drop', (e) => {
+    e.preventDefault();
+    el.classList.remove('drop');
+    const paths = [...e.dataTransfer.files].map((f) => sb.pathForFile(f)).filter(Boolean);
+    if (paths.length) { term.paste(paths.map(shq).join(' ') + ' '); term.focus(); }
+  });
+  el.addEventListener('contextmenu', (e) => { e.preventDefault(); paneMenu(p); });
+  return p;
+}
+
+const shq = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+const cleanTitle = (t) => (t || '').replace(/^[\s⠀-⣿✳✢✶✻✽·*⠀-⣿]+/, '').trim();
+
+function keyHandler(p, e) {
+  const down = e.type === 'keydown';
+  if (e.metaKey) {
+    // Natural text editing, like iTerm2's preset.
+    if (down && e.key === 'ArrowLeft') sb.write(p.id, '\x01');
+    else if (down && e.key === 'ArrowRight') sb.write(p.id, '\x05');
+    else if (down && e.key === 'Backspace') sb.write(p.id, '\x15');
+    return false; // every other ⌘ shortcut belongs to the app menu
+  }
+  if (e.key === 'Enter' && e.shiftKey && !e.altKey && !e.ctrlKey) {
+    if (down) sb.write(p.id, '\x1b\r'); // Claude Code: Shift+Enter inserts a newline
+    return false;
+  }
+  if (e.altKey && !e.ctrlKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    if (down) sb.write(p.id, e.key === 'ArrowLeft' ? '\x1bb' : '\x1bf');
+    return false;
+  }
+  return true;
+}
+
+function setRenderer(p, visible) {
+  // GPU renderer only for panes on screen; browsers cap WebGL contexts at ~16.
+  p.visible = visible;
+  if (visible && !p.webgl) {
+    try {
+      const gl = new WebglAddon.WebglAddon();
+      gl.onContextLoss(() => { gl.dispose(); p.webgl = null; });
+      p.term.loadAddon(gl);
+      p.webgl = gl;
+    } catch { p.webgl = null; }
+  } else if (!visible && p.webgl) {
+    try { p.webgl.dispose(); } catch {}
+    p.webgl = null;
+  }
+}
+
+function fitPane(p) {
+  if (!p || p.exited || !p.el.isConnected || !p.el.offsetParent) return;
+  try {
+    const before = `${p.term.cols}x${p.term.rows}`;
+    p.fit.fit();
+    if (`${p.term.cols}x${p.term.rows}` !== before) sb.resize(p.id, p.term.cols, p.term.rows);
+  } catch {}
+}
+
+async function spawnPane(p, command) {
+  // Size the terminal to its real slot before the shell starts so the first prompt draws correctly.
+  fitPane(p);
+  const r = await sb.spawn({ id: p.id, cwd: p.path, cols: p.term.cols || 100, rows: p.term.rows || 30, section: p.section, command });
+  if (r?.error) toast(`Couldn't start the shell: ${r.error}`);
+}
+
+async function attachPane(p) {
+  p.restoring = true;
+  const snap = await sb.snapshot(p.id);
+  if (snap?.data != null) {
+    p.term.reset();
+    if (snap.cols && snap.rows) p.term.resize(snap.cols, snap.rows);
+    p.term.write(snap.data);
+  }
+  p.restoring = false;
+  requestAnimationFrame(() => fitPane(p));
+  return snap?.data != null;
+}
+
+function disposePane(id, { kill = true } = {}) {
+  const p = panes.get(id);
+  if (!p) return;
+  if (kill) sb.kill(id);
+  setRenderer(p, false);
+  p.term.dispose();
+  p.el.remove();
+  panes.delete(id);
+}
+
+// ------------------------------------------------------------------ claude status
+function isSeen(p) {
+  const t = tabOf(p.id);
+  return windowFocused && t && t.section === active && current[active] === t.id && t.focus === p.id;
+}
+
+function setUnread(p, kind, message) {
+  const was = p.unread;
+  p.unread = kind;
+  if (message) p.message = message;
+  if (was !== kind && cfg.ui.notify) {
+    const t = tabOf(p.id);
+    const where = t ? `${p.name} · ${LABEL[t.section]}` : p.name;
+    sb.notify({
+      title: kind === 'waiting' ? `${p.name} needs you` : `${p.name} is done`,
+      body: p.message || p.title || where,
+      paneId: p.id,
+    });
+  }
+  renderAttention();
+}
+
+function setState(p, state) {
+  if (p.state === state) return;
+  const prev = p.state;
+  p.state = state;
+  if (state === 'working') p.workStart = p.workStart || Date.now();
+  if (state !== 'working') p.workStart = 0;
+  if (!isSeen(p)) {
+    if (state === 'waiting') setUnread(p, 'waiting', p.message || 'Waiting for your permission');
+    else if (state === 'done' && prev === 'working') setUnread(p, 'done', p.title ? `Finished: ${p.title}` : 'Finished');
+  }
+  if (state === 'working' && p.unread) { p.unread = null; renderAttention(); }
+  renderTabs();
+  renderProjects();
+  renderStatus();
+}
+
+// Hook events (precise) when the user registered Switchboard's hook with Claude Code.
+function onClaudeEvent(id, ev) {
+  const p = panes.get(id);
+  if (!p) return;
+  if (ev.session) p.claudeSession = ev.session;
+  p.hook = { ...ev, seen: Date.now() };
+  switch (ev.event) {
+    case 'SessionStart': p.claudeRunning = true; setState(p, 'idle'); break;
+    case 'UserPromptSubmit':
+    case 'PostToolUse': p.claudeRunning = true; setState(p, 'working'); break;
+    case 'Notification': {
+      const permission = /permission|approve|allow/i.test(ev.message || '');
+      p.message = ev.message || '';
+      setState(p, permission ? 'waiting' : 'done');
+      if (permission && !isSeen(p)) setUnread(p, 'waiting', ev.message);
+      break;
+    }
+    case 'Stop': setState(p, 'done'); break;
+    case 'SessionEnd': p.claudeRunning = false; p.hook = null; setState(p, 'shell'); break;
+  }
+  persist();
+}
+
+// Fallback heuristic when hooks aren't registered: Claude streams output while it works.
+function tickActivity() {
+  const now = Date.now();
+  for (const p of panes.values()) {
+    if (!p.claudeRunning) { if (p.state !== 'shell') setState(p, 'shell'); continue; }
+    if (p.hook && env.hooks) continue; // precise source wins
+    // Only count output after you've sent Claude something; startup screens aren't work.
+    const streaming = p.lastIn > p.claudeSince && now - p.lastOut < 1600 && p.lastOut - p.lastIn > 450;
+    if (streaming) setState(p, 'working');
+    else if (p.state === 'working' && now - p.lastOut > 2500) setState(p, 'done');
+    else if (p.state === 'shell') setState(p, 'idle');
+  }
+}
+
+function onProcs(procs) {
+  for (const [id, proc] of Object.entries(procs)) {
+    const p = panes.get(id);
+    if (!p) continue;
+    p.proc = proc;
+    const running = isClaudeProc(proc);
+    if (running !== p.claudeRunning) {
+      p.claudeRunning = running;
+      if (running) p.claudeSince = Date.now();
+      if (!running) { p.title = ''; setState(p, 'shell'); }
+      else if (p.state === 'shell') setState(p, 'idle');
+      persist();
+    }
+  }
+  renderTabs();
+  renderProjects();
+  renderStatus();
+}
+
+// ------------------------------------------------------------------ tabs
+async function openTab(section, proj, { claude = false, focus = true } = {}) {
+  const id = await sb.uuid();
+  const tab = { id: 't' + id.slice(0, 8), section, name: proj.name, path: proj.path, root: { k: 'pane', id }, focus: id };
+  tabs.push(tab);
+  const p = makePane({ id, section, name: proj.name, path: proj.path });
+  let command = null;
+  if (claude) {
+    p.claudeSession = await sb.uuid();
+    command = `claude --session-id ${p.claudeSession}`;
+  }
+  if (focus) {
+    if (section !== active) setSection(section, { quiet: true });
+    current[section] = tab.id;
+  }
+  renderView(tab);
+  showTab(focus ? tab.id : current[active]);
+  await spawnPane(p, command);
+  persist();
+  return tab;
+}
+
+function closeTab(tabId) {
+  const i = tabs.findIndex((t) => t.id === tabId);
+  if (i < 0) return;
+  const tab = tabs[i];
+  for (const id of leaves(tab.root)) disposePane(id);
+  $(`.view[data-tab="${tab.id}"]`)?.remove();
+  tabs.splice(i, 1);
+  if (current[tab.section] === tab.id) {
+    const same = tabs.filter((t) => t.section === tab.section);
+    current[tab.section] = (same[Math.min(i, same.length - 1)] || same[same.length - 1])?.id || null;
+  }
+  showTab(current[active]);
+  persist();
+}
+
+function closePane(paneId) {
+  const tab = tabOf(paneId);
+  if (!tab) return disposePane(paneId);
+  const root = removeLeaf(tab.root, paneId);
+  if (!root) return closeTab(tab.id);
+  disposePane(paneId);
+  tab.root = root;
+  if (tab.focus === paneId) tab.focus = leaves(root)[0];
+  renderView(tab);
+  showTab(tab.id);
+  persist();
+}
+
+async function splitPane(dir) {
+  const tab = currentTab();
+  if (!tab) return;
+  const from = panes.get(tab.focus);
+  const cwd = (await sb.cwd(from.id).catch(() => null)) || from.path;
+  const id = await sb.uuid();
+  tab.root = replaceNode(tab.root, from.id, (n) => ({ k: 'split', dir, r: 0.5, a: n, b: { k: 'pane', id } }));
+  tab.focus = id;
+  const p = makePane({ id, section: tab.section, name: from.name, path: cwd });
+  renderView(tab);
+  showTab(tab.id);
+  await spawnPane(p, null);
+  persist();
+}
+
+function focusPane(id) {
+  const tab = tabOf(id);
+  if (!tab) return;
+  if (tab.focus !== id) { tab.focus = id; persist(); }
+  const p = panes.get(id);
+  $$('.pane', $(`.view[data-tab="${tab.id}"]`)).forEach((el) => el.classList.toggle('focused', el.dataset.pane === id));
+  if (p) {
+    p.term.focus();
+    if (p.unread) { p.unread = null; renderAttention(); }
+  }
+  renderTabs();
+  renderProjects();
+  renderStatus();
+}
+
+function focusDir(dir) {
+  const tab = currentTab();
+  if (!tab) return;
+  const cur = panes.get(tab.focus)?.el.getBoundingClientRect();
+  if (!cur) return;
+  const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
+  let best = null, bestD = Infinity;
+  for (const id of leaves(tab.root)) {
+    if (id === tab.focus) continue;
+    const r = panes.get(id).el.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const ok = { left: x < cx - 4, right: x > cx + 4, up: y < cy - 4, down: y > cy + 4 }[dir];
+    const d = Math.hypot(x - cx, y - cy);
+    if (ok && d < bestD) { best = id; bestD = d; }
+  }
+  if (best) focusPane(best);
+}
+
+// Build (or rebuild) a tab's view, moving existing pane elements into place.
+function renderView(tab) {
+  let view = $(`.view[data-tab="${tab.id}"]`);
+  if (!view) {
+    view = document.createElement('div');
+    view.className = 'view';
+    view.dataset.tab = tab.id;
+    view.hidden = true;
+    $('#views').appendChild(view);
+  }
+  const build = (n) => {
+    if (n.k === 'pane') return panes.get(n.id).el;
+    const box = document.createElement('div');
+    box.className = `split ${n.dir}`;
+    const a = document.createElement('div');
+    const b = document.createElement('div');
+    a.className = b.className = 'slot';
+    a.style.flex = `${n.r} 1 0`;
+    b.style.flex = `${1 - n.r} 1 0`;
+    a.appendChild(build(n.a));
+    b.appendChild(build(n.b));
+    const d = document.createElement('div');
+    d.className = 'divider';
+    d.addEventListener('mousedown', (e) => dragDivider(e, n, box, a, b, d, tab));
+    d.addEventListener('dblclick', () => { n.r = 0.5; a.style.flex = '0.5 1 0'; b.style.flex = '0.5 1 0'; refit(tab); persist(); });
+    box.append(a, d, b);
+    return box;
+  };
+  const tree = build(tab.root);
+  view.replaceChildren(tree);
+  view.classList.toggle('multi', leaves(tab.root).length > 1);
+  if (tree.classList.contains('pane')) tree.style.flex = '1';
+}
+
+function dragDivider(e, node, box, a, b, d, tab) {
+  e.preventDefault();
+  d.classList.add('active');
+  const rect = box.getBoundingClientRect();
+  const move = (ev) => {
+    const r = node.dir === 'row' ? (ev.clientX - rect.left) / rect.width : (ev.clientY - rect.top) / rect.height;
+    node.r = Math.min(0.85, Math.max(0.15, r));
+    a.style.flex = `${node.r} 1 0`;
+    b.style.flex = `${1 - node.r} 1 0`;
+    refit(tab);
+  };
+  const up = () => {
+    d.classList.remove('active');
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+    persist();
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+}
+
+function refit(tab) { for (const id of leaves(tab.root)) fitPane(panes.get(id)); }
+
+function showTab(tabId) {
+  const tab = tabs.find((t) => t.id === tabId && t.section === active);
+  current[active] = tab ? tab.id : null;
+  for (const t of tabs) {
+    const v = $(`.view[data-tab="${t.id}"]`);
+    if (!v) continue;
+    const on = t === tab;
+    if (on && v.hidden) { v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter'); }
+    v.hidden = !on;
+    for (const id of leaves(t.root)) { const p = panes.get(id); if (p) setRenderer(p, on); }
+  }
+  $('#empty').hidden = !!tab;
+  $('#empty-title').textContent = `${LABEL[active]} is quiet`;
+  if (tab) {
+    requestAnimationFrame(() => { refit(tab); focusPane(tab.focus); });
+  }
+  renderTabs();
+  renderProjects();
+  renderStatus();
+  persist();
+}
+
+function cycleTab(dir) {
+  const list = tabs.filter((t) => t.section === active);
+  if (!list.length) return;
+  const i = list.findIndex((t) => t.id === current[active]);
+  showTab(list[(i + dir + list.length) % list.length].id);
+}
+
+function tabGlyph(p) {
+  if (!p) return `<span class="glyph">${ICON.prompt}</span>`;
+  if (!p.claudeRunning) return `<span class="glyph">${ICON.prompt}</span>`;
+  return `<span class="glyph claude ${p.state}">${ICON.spark}</span>`;
+}
+
+function tabSubtitle(tab) {
+  const p = panes.get(tab.focus);
+  if (!p) return '';
+  if (p.claudeRunning) {
+    if (p.state === 'working') return p.title || 'Working…';
+    if (p.state === 'waiting') return 'Needs your permission';
+    return p.title || 'Claude';
+  }
+  if (p.proc && !/^(zsh|bash|fish|-zsh|login)$/.test(p.proc)) return p.proc;
+  return p.path;
+}
+
+function renderTabs() {
+  const bar = $('#tabs');
+  const list = tabs.filter((t) => t.section === active);
+  const existing = new Map($$('.tab', bar).map((el) => [el.dataset.id, el]));
+  const keep = new Set();
+  list.forEach((t, i) => {
+    keep.add(t.id);
+    let el = existing.get(t.id);
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'tab';
+      el.dataset.id = t.id;
+      el.draggable = true;
+      el.addEventListener('click', () => showTab(t.id));
+      el.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(t.id); });
+      el.addEventListener('dblclick', () => renameTab(t));
+      el.addEventListener('contextmenu', (e) => { e.preventDefault(); tabMenu(t); });
+      el.addEventListener('dragstart', (e) => { el.classList.add('dragging'); e.dataTransfer.setData('text/tab', t.id); });
+      el.addEventListener('dragend', () => el.classList.remove('dragging'));
+      el.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('text/tab')) { e.preventDefault(); el.classList.add('drop-before'); } });
+      el.addEventListener('dragleave', () => el.classList.remove('drop-before'));
+      el.addEventListener('drop', (e) => {
+        el.classList.remove('drop-before');
+        const from = tabs.findIndex((x) => x.id === e.dataTransfer.getData('text/tab'));
+        if (from < 0) return;
+        const [moved] = tabs.splice(from, 1);
+        tabs.splice(tabs.findIndex((x) => x.id === t.id), 0, moved);
+        renderTabs(); persist();
+      });
+    }
+    const unread = leaves(t.root).map((id) => panes.get(id)).find((p) => p?.unread);
+    const html = `${tabGlyph(panes.get(t.focus))}<span class="txt"><span class="t1">${esc(t.name)}${leaves(t.root).length > 1 ? ` <span style="color:var(--text-3);font-weight:500">· ${leaves(t.root).length}</span>` : ''}</span><span class="t2">${esc(tabSubtitle(t))}</span></span>${unread ? `<i class="unread ${unread.unread}"></i>` : ''}<span class="x" title="Close tab (⇧⌘W)">${ICON.x}</span>`;
+    if (el.dataset.html !== html) {
+      el.innerHTML = html;
+      el.dataset.html = html;
+      $('.x', el).addEventListener('click', (e) => { e.stopPropagation(); closeTab(t.id); });
+    }
+    el.classList.toggle('on', t.id === current[active]);
+    if (bar.children[i] !== el) bar.insertBefore(el, bar.children[i] || null);
+  });
+  for (const [id, el] of existing) if (!keep.has(id)) el.remove();
+}
+
+function renameTab(t) {
+  const el = $(`.tab[data-id="${t.id}"] .t1`);
+  if (!el) return;
+  const input = document.createElement('input');
+  input.value = t.name;
+  input.style.cssText = 'width:100%;border:0;outline:0;background:none;font-weight:600;font-size:12.5px';
+  el.replaceChildren(input);
+  input.focus(); input.select();
+  const done = (save) => {
+    if (save && input.value.trim()) { t.name = input.value.trim(); persist(); }
+    $(`.tab[data-id="${t.id}"]`).dataset.html = '';
+    renderTabs();
+  };
+  input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+  input.addEventListener('blur', () => done(true));
+}
+
+async function tabMenu(t) {
+  const other = t.section === 'office' ? 'personal' : 'office';
+  const r = await sb.popup([
+    { id: 'rename', label: 'Rename Tab' },
+    { id: 'move', label: `Move to ${LABEL[other]}` },
+    '-',
+    { id: 'reveal', label: 'Reveal in Finder' },
+    { id: 'code', label: 'Open in VS Code' },
+    '-',
+    { id: 'close', label: 'Close Tab' },
+  ]);
+  if (r === 'rename') renameTab(t);
+  else if (r === 'move') {
+    t.section = other;
+    for (const id of leaves(t.root)) panes.get(id).section = other;
+    if (current[active] === t.id) current[active] = null;
+    current[other] = t.id;
+    showTab(current[active] || tabs.find((x) => x.section === active)?.id);
+    toast(`Moved to ${LABEL[other]}`);
+  } else if (r === 'reveal') sb.reveal(t.path);
+  else if (r === 'code') sb.openEditor(t.path);
+  else if (r === 'close') closeTab(t.id);
+}
+
+async function paneMenu(p) {
+  const hasSel = p.term.hasSelection();
+  const r = await sb.popup([
+    { id: 'copy', label: 'Copy', enabled: hasSel },
+    { id: 'paste', label: 'Paste' },
+    '-',
+    { id: 'split-r', label: 'Split Right' },
+    { id: 'split-d', label: 'Split Down' },
+    '-',
+    { id: 'find', label: 'Find…' },
+    { id: 'clear', label: 'Clear Screen' },
+    '-',
+    { id: 'close', label: 'Close Pane' },
+  ]);
+  if (r === 'copy') document.execCommand('copy');
+  else if (r === 'paste') { p.term.focus(); document.execCommand('paste'); }
+  else if (r === 'split-r') splitPane('row');
+  else if (r === 'split-d') splitPane('col');
+  else if (r === 'find') openFind(p);
+  else if (r === 'clear') p.term.clear();
+  else if (r === 'close') closePane(p.id);
+}
+
+// ------------------------------------------------------------------ find
+function openFind(p) {
+  if (!p) return;
+  let bar = $('.findbar', p.el);
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.className = 'findbar';
+    bar.innerHTML = `<input placeholder="Find" spellcheck="false"><span class="count"></span>
+      <button class="icon-btn" data-d="prev" title="Previous (⇧↵)">${ICON.up}</button>
+      <button class="icon-btn" data-d="next" title="Next (↵)">${ICON.down}</button>
+      <button class="icon-btn" data-d="close" title="Close (esc)">${ICON.x}</button>`;
+    p.el.appendChild(bar);
+    const input = $('input', bar);
+    const opts = { decorations: { matchOverviewRuler: '#f7b928', activeMatchColorOverviewRuler: '#4599ff', matchBackground: '#5c4a12', activeMatchBackground: '#1b4fa8' } };
+    const go = (back) => (back ? p.search.findPrevious(input.value, opts) : p.search.findNext(input.value, opts));
+    p.search.onDidChangeResults?.(({ resultIndex, resultCount }) => {
+      $('.count', bar).textContent = input.value ? (resultCount ? `${resultIndex + 1} of ${resultCount}` : 'No results') : '';
+    });
+    const close = () => { p.search.clearDecorations(); bar.remove(); p.term.focus(); };
+    input.addEventListener('input', () => go(false));
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') go(e.shiftKey);
+      if (e.key === 'Escape') close();
+    });
+    bar.addEventListener('click', (e) => {
+      const d = e.target.closest('button')?.dataset.d;
+      if (d === 'close') close(); else if (d) go(d === 'prev');
+    });
+  }
+  const input = $('input', bar);
+  const sel = p.term.getSelection();
+  if (sel && !sel.includes('\n')) input.value = sel;
+  input.focus();
+  input.select();
+}
+
+// ------------------------------------------------------------------ sections & sidebar
+function setSection(s, { quiet = false } = {}) {
+  if (!SECTIONS.includes(s)) return;
+  const changed = active !== s;
+  active = s;
+  document.body.dataset.section = s;
+  $$('#switch button').forEach((b) => b.classList.toggle('on', b.dataset.section === s));
+  $('#projects-title').textContent = `${LABEL[s]} projects`;
+  if (changed) {
+    const ul = $('#projects');
+    ul.classList.remove('stagger'); void ul.offsetWidth; ul.classList.add('stagger');
+  }
+  renderProjects();
+  if (!quiet) showTab(current[s] || tabs.find((t) => t.section === s)?.id);
+  refreshGit();
+  persist();
+}
+
+function projectState(section, proj) {
+  const ps = [...panes.values()].filter((p) => p.section === section && p.path === proj.path || (p.section === section && tabOf(p.id)?.path === proj.path));
+  const order = ['waiting', 'working', 'done', 'idle', 'shell'];
+  let best = null;
+  for (const p of ps) {
+    const s = p.claudeRunning ? p.state : 'shell';
+    if (!best || order.indexOf(s) < order.indexOf(best)) best = s;
+  }
+  return { count: ps.length, state: best };
+}
+
+function renderProjects() {
+  const ul = $('#projects');
+  const cur = currentTab();
+  const list = cfg.sections[active].projects;
+  const html = list.map((proj, i) => {
+    const { count, state } = projectState(active, proj);
+    const g = git[proj.path];
+    const sub = [
+      g?.branch ? `<span class="branch">${esc(g.branch)}</span>` : `<span class="branch">${esc(proj.path.replace(/^~\//, ''))}</span>`,
+      g?.dirty ? `<span class="dirty">${g.dirty} changed</span>` : '',
+      count ? `<span class="open">· ${count} open</span>` : '',
+    ].join('');
+    return `<li class="proj ${cur && cur.path === proj.path ? 'current' : ''}" data-i="${i}" style="--i:${i}" title="${esc(proj.path)}">
+      <span class="avatar" style="--av:${tint(active, proj.name)}">${esc(initial(proj.name))}${state ? `<i class="st" data-s="${state}"></i>` : ''}</span>
+      <span class="meta"><span class="name">${esc(proj.name)}</span><span class="sub">${sub}</span></span>
+      <span class="acts">
+        <button class="icon-btn" data-act="claude" title="New Claude session">${ICON.spark}</button>
+        <button class="icon-btn" data-act="shell" title="New shell">${ICON.prompt}</button>
+      </span></li>`;
+  }).join('') || `<li class="proj" style="color:var(--text-3)">Add a folder to start.</li>`;
+  if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
+  for (const s of SECTIONS) {
+    const n = tabs.filter((t) => t.section === s).length;
+    const waiting = [...panes.values()].filter((p) => p.section === s && (p.unread === 'waiting' || p.state === 'waiting')).length;
+    const el = $(`#switch button[data-section="${s}"] .count`);
+    el.textContent = waiting || n || '';
+    el.classList.toggle('alert', waiting > 0 && s !== active);
+  }
+}
+
+$('#projects').addEventListener('click', (e) => {
+  const li = e.target.closest('.proj[data-i]');
+  if (!li) return;
+  const proj = cfg.sections[active].projects[+li.dataset.i];
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'claude') openTab(active, proj, { claude: true });
+  else if (act === 'shell') openTab(active, proj);
+  else focusOrOpen(proj);
+});
+$('#projects').addEventListener('contextmenu', async (e) => {
+  const li = e.target.closest('.proj[data-i]');
+  if (!li) return;
+  e.preventDefault();
+  const i = +li.dataset.i;
+  const list = cfg.sections[active].projects;
+  const proj = list[i];
+  const other = active === 'office' ? 'personal' : 'office';
+  const r = await sb.popup([
+    { id: 'claude', label: 'New Claude Session' },
+    { id: 'shell', label: 'New Shell' },
+    '-',
+    { id: 'rename', label: 'Rename…' },
+    { id: 'move', label: `Move to ${LABEL[other]}` },
+    { id: 'reveal', label: 'Reveal in Finder' },
+    { id: 'code', label: 'Open in VS Code' },
+    '-',
+    { id: 'remove', label: 'Remove from Sidebar' },
+  ]);
+  if (r === 'claude') openTab(active, proj, { claude: true });
+  else if (r === 'shell') openTab(active, proj);
+  else if (r === 'reveal') sb.reveal(proj.path);
+  else if (r === 'code') sb.openEditor(proj.path);
+  else if (r === 'move') { list.splice(i, 1); cfg.sections[other].projects.push(proj); renderProjects(); persist(); toast(`${proj.name} moved to ${LABEL[other]}`); }
+  else if (r === 'remove') { list.splice(i, 1); renderProjects(); persist(); toast(`${proj.name} removed from the sidebar`); }
+  else if (r === 'rename') renameProject(li, proj);
+});
+
+function renameProject(li, proj) {
+  const nameEl = $('.name', li);
+  const input = document.createElement('input');
+  input.value = proj.name;
+  nameEl.replaceWith(input);
+  input.focus(); input.select();
+  const done = (save) => {
+    if (save && input.value.trim()) { proj.name = input.value.trim(); persist(); }
+    $('#projects').dataset.html = '';
+    renderProjects();
+  };
+  input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+  input.addEventListener('blur', () => done(true));
+  input.addEventListener('click', (e) => e.stopPropagation());
+}
+
+function focusOrOpen(proj) {
+  const mine = tabs.filter((t) => t.section === active && t.path === proj.path);
+  if (!mine.length) return openTab(active, proj);
+  const i = mine.findIndex((t) => t.id === current[active]);
+  showTab(mine[(i + 1) % mine.length].id);
+}
+
+async function addProject() {
+  const path = await sb.pickFolder();
+  if (!path) return;
+  const name = path.split('/').filter(Boolean).pop() || path;
+  cfg.sections[active].projects.push({ name, path });
+  renderProjects();
+  refreshGit();
+  persist();
+  toast(`${name} added to ${LABEL[active]}`);
+}
+
+function attentionList() {
+  return [...panes.values()]
+    .filter((p) => p.unread || p.state === 'waiting')
+    .map((p) => ({ p, tab: tabOf(p.id), kind: p.state === 'waiting' ? 'waiting' : p.unread }))
+    .filter((x) => x.tab);
+}
+
+function renderAttention() {
+  const list = attentionList();
+  const sec = $('#attention');
+  sec.hidden = !list.length;
+  $('.n', sec).textContent = list.length || '';
+  const ul = $('ul', sec);
+  const html = list.map(({ p, tab, kind }) => `<li class="att ${kind}" data-pane="${p.id}">
+      <i class="dot"></i>
+      <span><b>${esc(tab.name)}</b><small>${esc(kind === 'waiting' ? (p.message || 'Needs your permission') : (p.title ? `Done: ${p.title}` : 'Finished'))}</small></span>
+      <span class="sec">${LABEL[tab.section]}</span></li>`).join('');
+  if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
+  sb.badge(list.length);
+  renderProjects();
+  renderTabs();
+}
+$('#attention ul').addEventListener('click', (e) => {
+  const li = e.target.closest('[data-pane]');
+  if (li) revealPane(li.dataset.pane);
+});
+
+function revealPane(paneId) {
+  const tab = tabOf(paneId);
+  if (!tab) return;
+  if (tab.section !== active) setSection(tab.section, { quiet: true });
+  tab.focus = paneId;
+  showTab(tab.id);
+}
+
+function nextAttention() {
+  const list = attentionList();
+  if (!list.length) return toast('Nothing is waiting on you');
+  revealPane(list[0].p.id);
+}
+
+// ------------------------------------------------------------------ status bar & git
+function renderStatus() {
+  const p = focusedPane();
+  const t = currentTab();
+  $('#sb-path').textContent = p ? p.path : '';
+  const g = t && git[t.path];
+  $('#sb-branch').textContent = g?.branch ? `⎇ ${g.branch}${g.dirty ? ` · ${g.dirty} changed` : ''}${g.ahead ? ` · ↑${g.ahead}` : ''}${g.behind ? ` · ↓${g.behind}` : ''}` : '';
+  const c = $('#sb-claude');
+  c.className = p?.claudeRunning ? `chip ${p.state}` : 'chip';
+  c.innerHTML = p?.claudeRunning
+    ? `<i></i>${{ working: 'Claude is working', waiting: 'Claude needs your permission', done: 'Claude finished', idle: 'Claude is ready' }[p.state] || 'Claude'}`
+    : '';
+  const n = panes.size;
+  const running = [...panes.values()].filter((x) => x.claudeRunning).length;
+  $('#sb-sessions').innerHTML = n
+    ? `<span class="chip"><span class="live"></span>${n} session${n > 1 ? 's' : ''}${running ? ` · ${running} Claude` : ''} · keep running after you quit</span>`
+    : '';
+}
+
+async function refreshGit() {
+  const paths = [...new Set([...cfg.sections[active].projects.map((p) => p.path), ...tabs.map((t) => t.path)])];
+  Object.assign(git, await sb.git(paths));
+  renderProjects();
+  renderStatus();
+}
+
+// ------------------------------------------------------------------ palette
+const palette = { items: [], sel: 0 };
+
+function fuzzy(q, s) {
+  if (!q) return { score: 0, html: esc(s) };
+  const lower = s.toLowerCase();
+  let qi = 0, score = 0, last = -2, out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (qi < q.length && lower[i] === q[qi]) {
+      score += i === last + 1 ? 3 : 1;
+      if (i === 0 || /[\s\-_/.]/.test(s[i - 1])) score += 2;
+      last = i; qi++;
+      out += `<mark>${esc(s[i])}</mark>`;
+    } else out += esc(s[i]);
+  }
+  return qi === q.length ? { score: score - s.length * 0.01, html: out } : null;
+}
+
+function paletteSource() {
+  const items = [];
+  for (const t of tabs) {
+    for (const id of leaves(t.root)) {
+      const p = panes.get(id);
+      if (!p) continue;
+      items.push({
+        group: 'Open sessions', key: `${t.name} ${p.title}`, title: t.name,
+        sub: p.claudeRunning ? (p.title || 'Claude') : p.path, section: t.section,
+        icon: `<span class="ic">${p.claudeRunning ? ICON.spark : ICON.prompt}</span>`,
+        run: () => revealPane(id),
+      });
+    }
+  }
+  for (const s of [active, ...SECTIONS.filter((x) => x !== active)]) {
+    for (const proj of cfg.sections[s].projects) {
+      items.push({
+        group: 'Projects', key: proj.name, title: proj.name, sub: proj.path, section: s,
+        icon: `<span class="avatar" style="--av:${tint(s, proj.name)}">${esc(initial(proj.name))}</span>`,
+        run: () => { setSection(s, { quiet: true }); focusOrOpen(proj); },
+        alt: () => openTab(s, proj, { claude: true }),
+      });
+    }
+  }
+  const cmd = (title, icon, run, sub = '') => items.push({ group: 'Commands', key: title, title, sub, icon: `<span class="ic">${icon}</span>`, run });
+  cmd('New Claude session here', ICON.spark, () => menuAction('new-claude'), '⇧⌘T');
+  cmd('New shell here', ICON.prompt, () => menuAction('new-tab'), '⌘T');
+  cmd('Split right', ICON.split, () => splitPane('row'), '⌘D');
+  cmd('Split down', ICON.splitd, () => splitPane('col'), '⇧⌘D');
+  cmd(`Switch to ${LABEL[active === 'office' ? 'personal' : 'office']}`, ICON.swap, () => setSection(active === 'office' ? 'personal' : 'office'), active === 'office' ? '⌘2' : '⌘1');
+  cmd('Add a project folder', ICON.folder, addProject);
+  cmd('Toggle sidebar', ICON.side, () => menuAction('toggle-sidebar'), '⌘B');
+  cmd('Settings', ICON.gear, openSettings, '⌘,');
+  cmd('Quit and end all sessions', ICON.power, confirmQuitAll, '⌥⌘Q');
+  return items;
+}
+
+function openPalette() {
+  const el = $('#palette');
+  el.hidden = false;
+  el.classList.remove('closing');
+  const input = $('#palette-q');
+  input.value = '';
+  palette.sel = 0;
+  renderPalette();
+  input.focus();
+}
+function closeOverlay(el) {
+  if (el.hidden) return;
+  el.classList.add('closing');
+  setTimeout(() => { el.hidden = true; el.classList.remove('closing'); focusedPane()?.term.focus(); }, 130);
+}
+function renderPalette() {
+  const q = $('#palette-q').value.trim().toLowerCase();
+  const scored = paletteSource()
+    .map((it) => { const m = fuzzy(q, it.key); return m && { ...it, score: m.score, html: q ? fuzzy(q, it.title)?.html || esc(it.title) : esc(it.title) }; })
+    .filter(Boolean);
+  if (q) scored.sort((a, b) => b.score - a.score);
+  palette.items = q ? scored.slice(0, 40) : scored.filter((x) => x.group !== 'Projects' || x.section === active).slice(0, 40);
+  palette.sel = Math.min(palette.sel, Math.max(0, palette.items.length - 1));
+  let lastGroup = null;
+  const html = palette.items.map((it, i) => {
+    const head = !q && it.group !== lastGroup ? `<li class="grp">${it.group}</li>` : '';
+    lastGroup = it.group;
+    const tag = it.section ? `<span class="tag ${it.section}">${LABEL[it.section]}</span>` : it.sub && it.group === 'Commands' ? `<kbd>${esc(it.sub)}</kbd>` : '';
+    return `${head}<li class="it ${i === palette.sel ? 'sel' : ''}" data-i="${i}">${it.icon}<span><b>${it.html}</b>${it.group !== 'Commands' ? `<small>${esc(it.sub)}</small>` : ''}</span>${tag}</li>`;
+  }).join('') || `<li class="none">Nothing matches “${esc(q)}”.</li>`;
+  $('#palette-list').innerHTML = html;
+  $('#palette-list .sel')?.scrollIntoView({ block: 'nearest' });
+}
+function runPalette(i, alt) {
+  const it = palette.items[i];
+  if (!it) return;
+  closeOverlay($('#palette'));
+  setTimeout(() => (alt && it.alt ? it.alt() : it.run()), 10);
+}
+$('#palette-q').addEventListener('input', () => { palette.sel = 0; renderPalette(); });
+$('#palette-q').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { palette.sel = (palette.sel + 1) % Math.max(1, palette.items.length); renderPalette(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { palette.sel = (palette.sel - 1 + palette.items.length) % Math.max(1, palette.items.length); renderPalette(); e.preventDefault(); }
+  else if (e.key === 'Enter') runPalette(palette.sel, e.altKey);
+  else if (e.key === 'Escape') closeOverlay($('#palette'));
+});
+$('#palette-list').addEventListener('mousemove', (e) => {
+  const li = e.target.closest('.it');
+  if (li && +li.dataset.i !== palette.sel) { palette.sel = +li.dataset.i; $$('#palette-list .it').forEach((x) => x.classList.toggle('sel', x === li)); }
+});
+$('#palette-list').addEventListener('click', (e) => { const li = e.target.closest('.it'); if (li) runPalette(+li.dataset.i, e.altKey); });
+$('#palette').addEventListener('mousedown', (e) => { if (e.target.id === 'palette') closeOverlay($('#palette')); });
+
+// ------------------------------------------------------------------ settings, confirm, toast
+function openSettings() {
+  const el = $('#settings');
+  $('#set-font').textContent = cfg.ui.fontSize;
+  $('#set-meta').checked = cfg.ui.optionIsMeta;
+  $('#set-notify').checked = cfg.ui.notify;
+  $('#hooks-state').innerHTML = env.hooks
+    ? 'On. Claude reports exactly when it is working, waiting for permission, or done.'
+    : 'Estimated from terminal activity. For exact status, register Switchboard’s hook with Claude Code: add <code>~/.config/switchboard/bin/sb-hook</code> as a hook for SessionStart, UserPromptSubmit, PostToolUse, Notification, Stop and SessionEnd.';
+  el.hidden = false;
+}
+$('#settings').addEventListener('click', (e) => {
+  if (e.target.id === 'settings' || e.target.closest('[data-close]')) return closeOverlay($('#settings'));
+  const f = e.target.closest('[data-font]');
+  if (f) { setFont(+f.dataset.font); $('#set-font').textContent = cfg.ui.fontSize; }
+});
+$('#set-meta').addEventListener('change', (e) => {
+  cfg.ui.optionIsMeta = e.target.checked;
+  for (const p of panes.values()) p.term.options.macOptionIsMeta = cfg.ui.optionIsMeta;
+  persist();
+});
+$('#set-notify').addEventListener('change', (e) => { cfg.ui.notify = e.target.checked; persist(); });
+
+function setFont(delta) {
+  cfg.ui.fontSize = delta === 0 ? 13 : Math.max(9, Math.min(26, cfg.ui.fontSize + delta));
+  for (const p of panes.values()) p.term.options.fontSize = cfg.ui.fontSize;
+  const t = currentTab();
+  if (t) refit(t);
+  persist();
+}
+
+function confirmBox({ title, body, yes }) {
+  return new Promise((resolve) => {
+    const el = $('#confirm');
+    $('#confirm-title').textContent = title;
+    $('#confirm-body').textContent = body;
+    $('[data-yes]', el).textContent = yes;
+    el.hidden = false;
+    $('[data-no]', el).focus();
+    const done = (v) => { closeOverlay(el); el.onclick = null; resolve(v); };
+    el.onclick = (e) => {
+      if (e.target.closest('[data-yes]')) done(true);
+      else if (e.target.closest('[data-no]') || e.target.id === 'confirm') done(false);
+    };
+  });
+}
+
+async function confirmQuitAll() {
+  const ok = await confirmBox({
+    title: `End all ${panes.size} sessions?`,
+    body: 'Every shell and Claude session stops. Claude conversations can still be resumed later with /resume. To keep them running, quit with ⌘Q instead.',
+    yes: 'End sessions and quit',
+  });
+  if (ok) sb.quitAll();
+}
+
+function toast(text) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = `<i></i>${esc(text)}`;
+  $('#toasts').appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 260); }, 2600);
+}
+
+// ------------------------------------------------------------------ menu & keys
+function menuAction(action, arg) {
+  const t = currentTab();
+  const p = focusedPane();
+  const proj = t ? { name: t.name, path: p?.path || t.path } : { name: 'Home', path: '~' };
+  switch (action) {
+    case 'section': setSection(arg); break;
+    case 'new-tab': openTab(active, proj); break;
+    case 'new-claude': openTab(active, proj, { claude: true }); break;
+    case 'split': splitPane(arg); break;
+    case 'close-pane': if (p) closePane(p.id); break;
+    case 'close-tab': if (t) closeTab(t.id); break;
+    case 'clear': p?.term.clear(); break;
+    case 'select-all': p?.term.selectAll(); break;
+    case 'find': openFind(p); break;
+    case 'palette': openPalette(); break;
+    case 'next-attention': nextAttention(); break;
+    case 'cycle-tab': cycleTab(arg); break;
+    case 'focus-dir': focusDir(arg); break;
+    case 'toggle-sidebar':
+      document.body.classList.toggle('no-sidebar');
+      cfg.ui.sidebarHidden = document.body.classList.contains('no-sidebar');
+      setTimeout(() => t && refit(t), 280);
+      persist();
+      break;
+    case 'font': setFont(arg); break;
+    case 'settings': openSettings(); break;
+    case 'quit-all': confirmQuitAll(); break;
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    for (const id of ['palette', 'settings', 'confirm']) if (!$('#' + id).hidden) { closeOverlay($('#' + id)); e.preventDefault(); }
+  }
+});
+
+// sidebar resize
+$('#sash').addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const move = (ev) => {
+    const w = Math.max(220, Math.min(420, ev.clientX));
+    document.documentElement.style.setProperty('--side-w', w + 'px');
+    cfg.ui.sideW = w;
+  };
+  const up = () => {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+    const t = currentTab();
+    if (t) refit(t);
+    persist();
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+});
+
+// ------------------------------------------------------------------ boot
+sb.onData((id, d) => {
+  const p = panes.get(id);
+  if (!p || p.restoring) return;
+  p.lastOut = Date.now();
+  p.term.write(d);
+});
+sb.onExit((id, code) => {
+  const p = panes.get(id);
+  if (!p) return;
+  p.exited = true;
+  if (code === 0) return closePane(id); // `exit` closes the pane, like Terminal
+  const pill = document.createElement('div');
+  pill.className = 'ended';
+  pill.innerHTML = `Session ended (code ${code}) <button>Close pane</button>`;
+  $('button', pill).onclick = () => closePane(id);
+  p.el.appendChild(pill);
+});
+sb.onProcs(onProcs);
+sb.onClaude(onClaudeEvent);
+sb.onMenu(menuAction);
+sb.onFocusPane(revealPane);
+sb.onWindowFocus((f) => {
+  windowFocused = f;
+  if (f) { const p = focusedPane(); if (p?.unread) { p.unread = null; renderAttention(); } p?.term.focus(); }
+});
+sb.onReconnected(async () => {
+  for (const p of panes.values()) await attachPane(p);
+  sb.procsNow();
+});
+window.addEventListener('resize', debounce(() => { const t = currentTab(); if (t) refit(t); }, 60));
+new ResizeObserver(debounce(() => { const t = currentTab(); if (t) refit(t); }, 30)).observe($('#views'));
+
+$$('#switch button').forEach((b) => b.addEventListener('click', () => setSection(b.dataset.section)));
+$('#search').addEventListener('click', openPalette);
+$('#empty-palette').addEventListener('click', openPalette);
+$('#empty-claude').addEventListener('click', () => {
+  const first = cfg.sections[active].projects[0];
+  openTab(active, first || { name: 'Home', path: '~' }, { claude: true });
+});
+$('#add').addEventListener('click', addProject);
+$('#home-shell').addEventListener('click', () => openTab(active, { name: 'Home', path: '~' }));
+$('#settings-btn').addEventListener('click', openSettings);
+$('#new-tab').addEventListener('click', () => menuAction('new-tab'));
+$('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 'row'));
+
+(async function boot() {
+  cfg = await sb.getConfig();
+  env = await sb.env();
+  if (cfg.ui.sideW) document.documentElement.style.setProperty('--side-w', cfg.ui.sideW + 'px');
+  if (cfg.ui.sidebarHidden) document.body.classList.add('no-sidebar');
+  const hello = await sb.hello();
+  const alive = new Set(hello.panes.map((x) => x.id));
+  const saved = cfg.session || {};
+
+  active = saved.active || 'office';
+  document.body.dataset.section = active;
+  setSection(active, { quiet: true });
+
+  // Rebuild every saved tab. Live shells are re-attached with their full screen;
+  // shells lost to a restart are recreated, and Claude ones resume their own conversation.
+  const restored = { live: 0, resumed: 0 };
+  for (const st of saved.tabs || []) {
+    const ids = leaves(st.root);
+    const tab = { id: st.id, section: st.section, name: st.name, path: st.path, root: stripTree(st.root), focus: st.focus };
+    const recs = collect(st.root);
+    tabs.push(tab);
+    for (const id of ids) {
+      const rec = recs[id] || {};
+      const p = makePane({ id, section: st.section, name: rec.name || st.name, path: rec.path || st.path });
+      p.claudeSession = rec.claudeSession || null;
+      p._restore = alive.has(id) ? 'attach' : rec.wasClaude && rec.claudeSession ? 'resume' : 'shell';
+    }
+    if (!ids.includes(tab.focus)) tab.focus = ids[0];
+    renderView(tab);
+  }
+  // Shells the daemon still runs but the layout lost (e.g. crashed before saving).
+  for (const meta of hello.panes) {
+    if (panes.has(meta.id)) continue;
+    const tab = { id: 't' + meta.id.slice(0, 8), section: active, name: 'Recovered', path: meta.cwd, root: { k: 'pane', id: meta.id }, focus: meta.id };
+    tabs.push(tab);
+    const p = makePane({ id: meta.id, section: active, name: 'Recovered', path: meta.cwd });
+    p._restore = 'attach';
+    renderView(tab);
+  }
+
+  current.office = saved.current?.office && tabs.some((t) => t.id === saved.current.office) ? saved.current.office : tabs.find((t) => t.section === 'office')?.id || null;
+  current.personal = saved.current?.personal && tabs.some((t) => t.id === saved.current.personal) ? saved.current.personal : tabs.find((t) => t.section === 'personal')?.id || null;
+
+  // Make views measurable so restored shells get the right size.
+  showTab(current[active]);
+  document.body.classList.remove('booting');
+  document.body.classList.add('ready');
+
+  for (const p of panes.values()) {
+    if (p._restore === 'attach') { await attachPane(p); restored.live++; }
+    else if (p._restore === 'resume') {
+      await spawnPane(p, `claude --resume ${p.claudeSession} || claude --session-id ${p.claudeSession}`);
+      restored.resumed++;
+    } else await spawnPane(p, null);
+    delete p._restore;
+  }
+  sb.procsNow();
+  sb.claudeStates();
+  renderAttention();
+  refreshGit();
+  setInterval(tickActivity, 500);
+  setInterval(refreshGit, 20000);
+  setInterval(() => renderAttention(), 30000);
+  if (restored.resumed) toast(`Resumed ${restored.resumed} Claude conversation${restored.resumed > 1 ? 's' : ''} after restart`);
+  else if (restored.live) toast(`Reconnected to ${restored.live} running session${restored.live > 1 ? 's' : ''}`);
+})();
+
+function stripTree(n) {
+  return n.k === 'pane' ? { k: 'pane', id: n.id } : { k: 'split', dir: n.dir, r: n.r, a: stripTree(n.a), b: stripTree(n.b) };
+}
+function collect(n, out = {}) {
+  if (n.k === 'pane') out[n.id] = n; else { collect(n.a, out); collect(n.b, out); }
+  return out;
+}
