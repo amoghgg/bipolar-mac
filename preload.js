@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('sb', {
   pidAlive: (pids) => ipcRenderer.invoke('pid-alive', pids),
   onImportReady: on('import:ready'),
   git: (paths) => ipcRenderer.invoke('git', paths),
+  changes: (paths) => ipcRenderer.invoke('git:changes', paths),
+  diff: (p) => ipcRenderer.invoke('git:diff', p),
   pickFolder: () => ipcRenderer.invoke('dialog:folder'),
   popup: (items) => ipcRenderer.invoke('menu:popup', items),
   reveal: (p) => ipcRenderer.send('reveal', p),

@@ -271,8 +271,12 @@ function buildMenu() {
     {
       label: 'Shell',
       submenu: [
-        { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: send('new-tab') },
-        { label: 'New Claude Tab', accelerator: 'CmdOrCtrl+Shift+T', click: send('new-claude') },
+        { label: 'New Task…', accelerator: 'CmdOrCtrl+N', click: send('compose') },
+        { label: 'New Shell Here', accelerator: 'CmdOrCtrl+T', click: send('new-tab') },
+        { label: 'New Claude Here', accelerator: 'CmdOrCtrl+Shift+T', click: send('new-claude') },
+        { type: 'separator' },
+        { label: 'Archive Task', accelerator: 'CmdOrCtrl+E', click: send('archive') },
+        { label: 'Show Changes', accelerator: 'CmdOrCtrl+Shift+C', click: send('changes') },
         { type: 'separator' },
         { label: 'Split Right', accelerator: 'CmdOrCtrl+D', click: send('split', 'row') },
         { label: 'Split Down', accelerator: 'CmdOrCtrl+Shift+D', click: send('split', 'col') },
@@ -297,7 +301,8 @@ function buildMenu() {
       label: 'Go',
       submenu: [
         { label: 'Jump to Anything…', accelerator: 'CmdOrCtrl+P', click: send('palette') },
-        { label: 'Next Session Waiting on You', accelerator: 'CmdOrCtrl+J', click: send('next-attention') },
+        { label: 'Next Task Waiting on You', accelerator: 'CmdOrCtrl+J', click: send('next-attention') },
+        { label: 'Latest Update', accelerator: 'CmdOrCtrl+Shift+U', click: send('latest-unread') },
         { type: 'separator' },
         { label: 'Office', accelerator: 'CmdOrCtrl+1', click: send('section', 'office') },
         { label: 'Personal', accelerator: 'CmdOrCtrl+2', click: send('section', 'personal') },
@@ -430,6 +435,32 @@ ipcMain.handle('git', async (_e, paths) => {
     });
   })));
   return out;
+});
+
+// What changed in a project's working tree (staged + unstaged + untracked), Conductor-style.
+const run = (args, cwd) => new Promise((res) => execFile('git', args, { cwd, timeout: 6000, maxBuffer: 8 * 1024 * 1024 }, (e, out) => res(e ? null : out)));
+ipcMain.handle('git:changes', async (_e, paths) => {
+  const out = {};
+  await Promise.all(paths.map(async (p) => {
+    const dir = expand(p);
+    const num = await run(['diff', '--numstat', 'HEAD'], dir);
+    if (num == null) { out[p] = null; return; }
+    const untracked = ((await run(['ls-files', '--others', '--exclude-standard'], dir)) || '').split('\n').filter(Boolean);
+    let add = 0, del = 0;
+    const files = num.split('\n').filter(Boolean).map((l) => {
+      const [a, d, f] = l.split('\t');
+      add += +a || 0; del += +d || 0;
+      return { file: f, add: +a || 0, del: +d || 0 };
+    });
+    for (const f of untracked) files.push({ file: f, add: 0, del: 0, untracked: true });
+    out[p] = { files: files.length, add, del, list: files.slice(0, 200) };
+  }));
+  return out;
+});
+ipcMain.handle('git:diff', async (_e, p) => {
+  const dir = expand(p);
+  const patch = (await run(['diff', 'HEAD', '--no-color', '--no-ext-diff'], dir)) || '';
+  return { patch: patch.length > 600000 ? patch.slice(0, 600000) + '\n… (diff truncated)' : patch };
 });
 
 ipcMain.handle('dialog:folder', async () => {

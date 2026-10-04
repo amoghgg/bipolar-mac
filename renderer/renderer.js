@@ -74,7 +74,7 @@ const persist = debounce(() => {
   cfg.session = {
     active,
     current: { ...current },
-    tabs: tabs.map((t) => ({ id: t.id, section: t.section, name: t.name, path: t.path, focus: t.focus, root: ser(t.root) })),
+    tabs: tabs.map((t) => ({ id: t.id, section: t.section, name: t.name, path: t.path, focus: t.focus, createdAt: t.createdAt, root: ser(t.root) })),
   };
   sb.saveConfig(cfg);
 }, 300);
@@ -271,6 +271,7 @@ function setUnread(p, kind, message) {
 function setState(p, state, message = '') {
   if (p.state === state && p.message === message) return;
   const prev = p.state;
+  if (prev !== state) p.stateSince = Date.now();
   p.state = state;
   p.message = message;
   if (state === 'waiting' && prev !== 'waiting' && !isSeen(p) && cfg.ui.notify) {
@@ -359,15 +360,18 @@ function onProcs(procs) {
 }
 
 // ------------------------------------------------------------------ tabs
-async function openTab(section, proj, { claude = false, focus = true } = {}) {
+async function openTab(section, proj, { claude = false, focus = true, prompt = null, resume = null, cwd = null } = {}) {
   const id = await sb.uuid();
-  const tab = { id: 't' + id.slice(0, 8), section, name: proj.name, path: proj.path, root: { k: 'pane', id }, focus: id };
+  const tab = { id: 't' + id.slice(0, 8), section, name: proj.name, path: proj.path, root: { k: 'pane', id }, focus: id, createdAt: Date.now() };
   tabs.push(tab);
-  const p = makePane({ id, section, name: proj.name, path: proj.path });
+  const p = makePane({ id, section, name: proj.name, path: cwd || proj.path });
   let command = null;
-  if (claude) {
+  if (resume) {
+    p.claudeSession = resume;
+    command = `claude --resume ${resume}`;
+  } else if (claude) {
     p.claudeSession = await sb.uuid();
-    command = `claude --session-id ${p.claudeSession}`;
+    command = `claude --session-id ${p.claudeSession}${prompt ? ' ' + shq(prompt) : ''}`;
   }
   if (focus) {
     if (section !== active) setSection(section, { quiet: true });
@@ -585,18 +589,16 @@ function renderTabs() {
 function renderCrumb() {
   const t = currentTab();
   const p = t && panes.get(t.focus);
+  const c = t && changes[t.path];
+  const cb = $('#changes-btn');
+  cb.hidden = !(c && c.files);
+  if (c && c.files) cb.innerHTML = `<b>${c.files}</b> file${c.files > 1 ? 's' : ''} <span class="a">+${c.add}</span> <span class="d">−${c.del}</span>`;
   $('#crumb-glyph').innerHTML = t ? `<i class="st ${sessState(p)}"></i>` : '';
-  $('#crumb-title').textContent = t ? t.name : '';
+  $('#crumb-title').textContent = t ? sessLabel(t) : '';
   const sub = $('#crumb-sub');
-  sub.textContent = t ? tabSubtitle(t) : '';
+  sub.textContent = t ? `${projectOf(t)} · ${taskLine(t)}` : '';
   sub.className = p && p.claudeRunning ? p.state : '';
   $('#tabbar .tab-actions').style.visibility = t ? 'visible' : 'hidden';
-}
-
-function renameTab(t) {
-  const label = $(`#tree .sess[data-tab="${t.id}"] .label`);
-  if (!label) return;
-  editInline(label, t.name, (v) => { t.name = v; persist(); });
 }
 
 function editInline(el, value, save) {
@@ -717,125 +719,241 @@ function setSection(s, { quiet = false } = {}) {
   persist();
 }
 
-// ------------------------------------------------------------------ sidebar
-// One tree: projects with their open sessions nested under them, then everything
-// else under "Projects". Two levels, 28px rows, colour only for status.
+// ------------------------------------------------------------------ sidebar: the attention list
+// Tasks, not tabs (cmux / Conductor): a vertical list grouped by what needs you.
+// Each task shows its live line, its project, and how long it has been in that state.
 const ICON_FOLDER = '<svg viewBox="0 0 20 20"><path d="M2.8 6.3c0-.9.7-1.6 1.6-1.6h3.1l1.7 1.8h6.4c.9 0 1.6.7 1.6 1.6v6.6c0 .9-.7 1.6-1.6 1.6H4.4c-.9 0-1.6-.7-1.6-1.6z"/></svg>';
 const ICON_CHEV = '<svg class="chev" viewBox="0 0 10 10"><path d="M3.5 2 6.5 5l-3 3" stroke-width="1.4"/></svg>';
+const changes = {}; // project path -> {files, add, del, list}
 
 function sessState(p) {
   if (!p) return 'shell';
-  if (!p.claudeRunning && !p.waitPid) return 'shell';
-  if (p.waitPid) return 'idle';
+  if (p.waitPid) return 'moving';
+  if (!p.claudeRunning) return 'shell';
   if (p.state === 'idle' && p.unread === 'done') return 'done';
   return p.state || 'idle';
 }
-function sessLabel(t, projName) {
+const norm = (x) => (x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+function projectOf(t) {
+  for (const s of SECTIONS) {
+    const pr = cfg.sections[s].projects.find((x) => x.path === t.path);
+    if (pr) return pr.name;
+  }
+  return t.path === '~' ? 'home' : t.path.split('/').filter(Boolean).pop();
+}
+function sessLabel(t) {
   const p = panes.get(t.focus);
-  const same = (a, b) => (a || '').toLowerCase().replace(/[^a-z0-9]/g, '') === (b || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (t.name && !same(t.name, projName) && t.name !== 'Home') return t.name;
-  if (p && (p.claudeRunning || p.claudeSession) && p.title && !same(p.title, projName)) return p.title;
-  if (p && (p.claudeRunning || p.claudeSession)) return p.title || 'Claude';
+  const proj = projectOf(t);
+  if (t.name && norm(t.name) !== norm(proj) && t.name !== 'Home') return t.name;
+  if (p?.title && norm(p.title) !== norm(proj)) return p.title;
+  if (p && (p.claudeRunning || p.claudeSession)) return 'New conversation';
   if (p?.proc && !/^-?(zsh|bash|fish|login)$/.test(p.proc)) return p.proc;
   return 'Shell';
 }
-function sessRow(t, projName) {
+function dur(ms) {
+  const m = Math.floor(ms / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d`;
+}
+function taskLine(t) {
   const p = panes.get(t.focus);
   const st = sessState(p);
-  const waiting = st === 'waiting';
-  const tail = p?.waitPid ? 'moving…' : leaves(t.root).length > 1 ? `${leaves(t.root).length} panes` : '';
-  return `<li class="row sess ${st} ${waiting ? 'two' : ''} ${t.id === current[active] ? 'on' : ''}" data-tab="${t.id}" title="${esc(p?.path || t.path)}">
-    <i class="st ${st}"></i>
-    <span class="txt"><span class="label">${esc(sessLabel(t, projName))}</span>${waiting ? `<small>${esc(p.message || 'Needs your answer')}</small>` : ''}</span>
-    ${tail ? `<span class="tail">${esc(tail)}</span>` : ''}
+  const c = changes[t.path];
+  const ch = c && c.files ? ` · ${c.files} file${c.files > 1 ? 's' : ''} changed` : '';
+  switch (st) {
+    case 'moving': return 'moving over from Terminal';
+    case 'waiting': return p.message || 'needs your answer';
+    case 'working': return `working${p.workStart ? ` · ${dur(Date.now() - p.workStart)}` : ''}`;
+    case 'done': return `finished${ch}`;
+    case 'idle': return `ready${ch}`;
+    default: return p?.proc && !/^-?(zsh|bash|fish|login)$/.test(p.proc) ? `running ${p.proc}` : 'shell';
+  }
+}
+function taskRow(t, { showSection = false } = {}) {
+  const p = panes.get(t.focus);
+  const st = sessState(p);
+  const since = p?.stateSince || t.createdAt;
+  return `<li class="task ${st} ${t.id === current[active] && t.section === active ? 'on' : ''}" data-tab="${t.id}" title="${esc(p?.path || t.path)}">
+    <i class="st ${st === 'moving' ? 'idle' : st}"></i>
+    <div class="t-main">
+      <div class="t-top"><span class="t-name">${esc(sessLabel(t))}</span>${since ? `<time>${esc(ago(since))}</time>` : ''}</div>
+      <div class="t-sub">${showSection ? `<span class="tag sec ${t.section}">${LABEL[t.section]}</span>` : ''}<span class="tag">${esc(projectOf(t))}</span>${st === 'waiting' ? '' : `<span class="t-line">${esc(taskLine(t))}</span>`}</div>${st === 'waiting' ? `<div class="t-ask">${esc(taskLine(t))}</div>` : ''}
+    </div>
     <button class="x" data-act="close" title="Close">${ICON.x}</button></li>`;
 }
 
 function renderSidebar() {
   if (!cfg) return;
   const ul = $('#tree');
-  const projects = cfg.sections[active].projects;
-  const mine = tabs.filter((t) => t.section === active);
-  const used = new Set();
-  let html = '';
-  projects.forEach((proj, i) => {
-    const ts = mine.filter((t) => t.path === proj.path);
-    if (!ts.length) return;
-    ts.forEach((t) => used.add(t.id));
-    html += `<li class="row proj" data-proj="${i}" title="${esc(proj.path)}">${ICON_FOLDER}<span class="label">${esc(proj.name)}</span>
-      <span class="acts"><button data-act="claude" title="New Claude session here">${ICON.plus}</button><button data-act="shell" title="Shell here">${ICON.prompt}</button></span></li>`;
-    html += ts.map((t) => sessRow(t, proj.name)).join('');
-  });
-  const loose = mine.filter((t) => !used.has(t.id));
-  if (loose.length) {
-    html += `<li class="row proj dim" data-loose="1">${ICON_FOLDER}<span class="label">Other</span></li>`;
-    html += loose.map((t) => sessRow(t, '')).join('');
-  }
-  const idle = projects.map((proj, i) => ({ proj, i })).filter(({ proj }) => !mine.some((t) => t.path === proj.path));
-  if (idle.length) {
-    const open = cfg.ui.showIdle !== false;
-    html += `<li class="grp fold ${open ? 'open' : ''}" data-act="toggle-idle">${ICON_CHEV}<span>Projects</span><span class="n">${idle.length}</span></li>`;
-    if (open) html += idle.map(({ proj, i }) => `<li class="row proj dim" data-proj="${i}" title="${esc(proj.path)}">${ICON_FOLDER}<span class="label">${esc(proj.name)}</span>
-      <span class="acts"><button data-act="claude" title="New Claude session">${ICON.plus}</button><button data-act="shell" title="Shell here">${ICON.prompt}</button></span></li>`).join('');
-  }
-  if (!projects.length && !mine.length) html = `<li class="grp">Add a project folder to begin.</li>`;
+  const all = tabs;
+  const mine = all.filter((t) => t.section === active);
+  const stOf = (t) => sessState(panes.get(t.focus));
+  const needs = all.filter((t) => stOf(t) === 'waiting'); // from both sections: what needs you comes first
+  const working = mine.filter((t) => stOf(t) === 'working');
+  const ready = mine.filter((t) => ['done', 'idle', 'moving'].includes(stOf(t)))
+    .sort((a, b) => (stOf(a) === 'done' ? 0 : 1) - (stOf(b) === 'done' ? 0 : 1));
+  const shells = mine.filter((t) => stOf(t) === 'shell');
+  const archived = (cfg.archive || []).filter((x) => x.section === active);
+  const group = (key, title, list, opts = {}) => {
+    if (!list.length) return '';
+    const folded = opts.foldable && (cfg.ui.fold || {})[key];
+    return `<li class="grp ${key} ${opts.foldable ? 'fold' : ''} ${folded ? '' : 'open'}" data-fold="${opts.foldable ? key : ''}">${opts.foldable ? ICON_CHEV : ''}<span>${title}</span><span class="n">${list.length}</span></li>`
+      + (folded ? '' : list.map((t) => (opts.archive ? archRow(t) : taskRow(t, { showSection: opts.showSection && t.section !== active }))).join(''));
+  };
+  let html = group('needs', 'Needs you', needs, { showSection: true })
+    + group('working', 'Working', working)
+    + group('ready', 'Ready', ready)
+    + group('shells', 'Shells', shells, { foldable: true })
+    + group('archive', 'Archive', archived, { foldable: true, archive: true });
+  if (!mine.length && !needs.length) html = `<li class="hint-row">No tasks in ${LABEL[active]} yet. Start one with ⌘N.</li>` + html;
   if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
-
-  // Needs-you row (across both sections) and a quiet dot on the other section.
-  const waiting = attentionList();
-  const needs = $('#needs');
-  needs.hidden = !waiting.length;
-  $('.label', needs).textContent = waiting.length === 1 ? `${waiting[0].tab.name} needs you` : `${waiting.length} sessions need you`;
   for (const s of SECTIONS) {
-    $(`#seg button[data-section="${s}"]`).classList.toggle('alert', s !== active && waiting.some((w) => w.tab.section === s));
+    $(`#seg button[data-section="${s}"]`).classList.toggle('alert', s !== active && needs.some((t) => t.section === s));
   }
+}
+function archRow(a) {
+  return `<li class="task archived" data-arch="${esc(a.id)}" title="Click to resume this conversation">
+    <i class="st idle"></i>
+    <div class="t-main"><div class="t-top"><span class="t-name">${esc(a.name)}</span><time>${esc(ago(a.archivedAt))}</time></div>
+    <div class="t-sub"><span class="tag">${esc(a.project || '')}</span><span class="t-line">${a.claudeSession ? 'archived · click to resume' : 'archived shell'}</span></div></div>
+    <button class="x" data-act="forget" title="Remove from archive">${ICON.x}</button></li>`;
 }
 const renderProjects = renderSidebar;
 
 $('#tree').addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')?.dataset.act;
-  if (act === 'toggle-idle') { cfg.ui.showIdle = cfg.ui.showIdle === false; persist(); return renderSidebar(); }
-  const sess = e.target.closest('.sess');
-  if (sess) return act === 'close' ? requestCloseTab(sess.dataset.tab) : showTab(sess.dataset.tab);
-  const row = e.target.closest('.proj[data-proj]');
+  const fold = e.target.closest('[data-fold]')?.dataset.fold;
+  if (fold) { cfg.ui.fold = { ...(cfg.ui.fold || {}), [fold]: !(cfg.ui.fold || {})[fold] }; persist(); return renderSidebar(); }
+  const arch = e.target.closest('[data-arch]');
+  if (arch) return act === 'forget' ? forgetArchived(arch.dataset.arch) : resumeArchived(arch.dataset.arch);
+  const row = e.target.closest('[data-tab]');
   if (!row) return;
-  const proj = cfg.sections[active].projects[+row.dataset.proj];
-  if (act === 'claude') openTab(active, proj, { claude: true });
-  else if (act === 'shell') openOnce(active, proj, 'shell');
-  else openOnce(active, proj, 'claude');
+  if (act === 'close') return requestCloseTab(row.dataset.tab);
+  const t = tabs.find((x) => x.id === row.dataset.tab);
+  if (t) revealPane(t.focus);
 });
 $('#tree').addEventListener('dblclick', (e) => {
-  const sess = e.target.closest('.sess');
-  if (sess) renameTab(tabs.find((t) => t.id === sess.dataset.tab));
+  const row = e.target.closest('[data-tab]');
+  if (!row) return;
+  const t = tabs.find((x) => x.id === row.dataset.tab);
+  editInline($('.t-name', row), sessLabel(t), (v) => { t.name = v; persist(); });
 });
-$('#tree').addEventListener('contextmenu', async (e) => {
-  const sess = e.target.closest('.sess');
-  if (sess) { e.preventDefault(); return tabMenu(tabs.find((t) => t.id === sess.dataset.tab)); }
-  const row = e.target.closest('.proj[data-proj]');
+$('#tree').addEventListener('contextmenu', (e) => {
+  const row = e.target.closest('[data-tab]');
   if (!row) return;
   e.preventDefault();
-  const i = +row.dataset.proj;
-  const list = cfg.sections[active].projects;
-  const proj = list[i];
-  const other = active === 'office' ? 'personal' : 'office';
-  const r = await sb.popup([
-    { id: 'claude', label: 'New Claude Session' },
-    { id: 'shell', label: 'New Shell' },
-    '-',
-    { id: 'rename', label: 'Rename…' },
-    { id: 'move', label: `Move to ${LABEL[other]}` },
-    { id: 'reveal', label: 'Reveal in Finder' },
-    { id: 'code', label: 'Open in VS Code' },
-    '-',
-    { id: 'remove', label: 'Remove from Sidebar' },
-  ]);
-  if (r === 'claude') openTab(active, proj, { claude: true });
-  else if (r === 'shell') openTab(active, proj);
-  else if (r === 'reveal') sb.reveal(proj.path);
-  else if (r === 'code') sb.openEditor(proj.path);
-  else if (r === 'move') { list.splice(i, 1); cfg.sections[other].projects.push(proj); renderSidebar(); persist(); toast(`${proj.name} moved to ${LABEL[other]}`); }
-  else if (r === 'remove') { list.splice(i, 1); renderSidebar(); persist(); toast(`${proj.name} removed from the sidebar`); }
-  else if (r === 'rename') editInline($('.label', row), proj.name, (v) => { proj.name = v; persist(); });
+  tabMenu(tabs.find((t) => t.id === row.dataset.tab));
+});
+function renameTab(t) {
+  const label = $(`#tree [data-tab="${t.id}"] .t-name`);
+  if (label) editInline(label, sessLabel(t), (v) => { t.name = v; persist(); });
+}
+
+// ------------------------------------------------------------------ archive
+async function archiveTask(t) {
+  if (!t) return;
+  const p = panes.get(t.focus);
+  if (p?.claudeRunning && p.state === 'working') {
+    const ok = await confirmBox({ title: 'Archive while Claude is working?', body: 'Claude stops here. The conversation is kept and resumes from the Archive with one click.', yes: 'Archive' });
+    if (!ok) return;
+  }
+  cfg.archive = cfg.archive || [];
+  if (p?.claudeSession || p?.claudeRunning) {
+    cfg.archive.unshift({ id: t.id, name: sessLabel(t), section: t.section, path: t.path, cwd: p?.path || t.path, project: projectOf(t), claudeSession: p?.claudeSession || null, archivedAt: Date.now() });
+    cfg.archive = cfg.archive.slice(0, 60);
+  }
+  closeTab(t.id);
+  toast('Archived. Resume it any time from the Archive.');
+}
+async function resumeArchived(id) {
+  const i = (cfg.archive || []).findIndex((x) => x.id === id);
+  if (i < 0) return;
+  const a = cfg.archive[i];
+  cfg.archive.splice(i, 1);
+  const tab = await openTab(a.section, { name: a.name, path: a.path }, { cwd: a.cwd, resume: a.claudeSession });
+  tab.name = a.name;
+  persist();
+}
+function forgetArchived(id) { cfg.archive = (cfg.archive || []).filter((x) => x.id !== id); persist(); renderSidebar(); }
+
+// ------------------------------------------------------------------ composer: new task
+let composeSel = 0;
+function composeProjects() { return [...cfg.sections[active].projects, { name: 'Home', path: '~' }]; }
+function openComposer(preset) {
+  const el = $('#composer');
+  const list = composeProjects();
+  const cur = currentTab();
+  composeSel = Math.max(0, list.findIndex((x) => x.path === (preset?.path || cur?.path)));
+  $('#c-sec').textContent = LABEL[active];
+  $('#c-brief').value = '';
+  renderComposeProjects();
+  el.hidden = false;
+  el.classList.remove('closing');
+  setTimeout(() => $('#c-brief').focus(), 30);
+}
+function renderComposeProjects() {
+  $('#c-projects').innerHTML = composeProjects().map((pr, i) => {
+    const c = changes[pr.path];
+    return `<button class="c-proj ${i === composeSel ? 'on' : ''}" data-i="${i}">${ICON_FOLDER}<span>${esc(pr.name)}</span>${c?.files ? `<small>${c.files}△</small>` : ''}</button>`;
+  }).join('');
+}
+$('#c-projects').addEventListener('click', (e) => {
+  const b = e.target.closest('.c-proj');
+  if (!b) return;
+  composeSel = +b.dataset.i;
+  renderComposeProjects();
+  if (e.detail === 2) startComposed();
+});
+async function startComposed() {
+  const pr = composeProjects()[composeSel];
+  if (!pr) return;
+  const brief = $('#c-brief').value.trim();
+  closeOverlay($('#composer'));
+  const name = brief ? brief.replace(/\s+/g, ' ').split(' ').slice(0, 7).join(' ') + (brief.split(/\s+/).length > 7 ? '…' : '') : pr.name;
+  const tab = await openTab(active, pr, { claude: true, prompt: brief || null });
+  tab.name = brief ? name : pr.name;
+  persist();
+  renderSidebar();
+}
+$('#c-start').addEventListener('click', startComposed);
+$('#c-cancel').addEventListener('click', () => closeOverlay($('#composer')));
+$('#c-add').addEventListener('click', async () => { await addProject(); renderComposeProjects(); });
+$('#composer').addEventListener('mousedown', (e) => { if (e.target.id === 'composer') closeOverlay($('#composer')); });
+$('#c-brief').addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter' && e.metaKey) { e.preventDefault(); startComposed(); }
+  if (e.key === 'Escape') closeOverlay($('#composer'));
+  if (e.key === 'Tab') { e.preventDefault(); composeSel = (composeSel + (e.shiftKey ? -1 : 1) + composeProjects().length) % composeProjects().length; renderComposeProjects(); }
+});
+
+// ------------------------------------------------------------------ changes drawer
+async function refreshChanges() {
+  const paths = [...new Set(tabs.map((t) => t.path).filter((x) => x && x !== '~'))];
+  if (!paths.length) return;
+  Object.assign(changes, await sb.changes(paths));
+  renderSidebar();
+  renderCrumb();
+}
+async function openDrawer() {
+  const t = currentTab();
+  if (!t) return;
+  const d = $('#drawer');
+  const c = changes[t.path];
+  $('#drawer-sub').textContent = `${projectOf(t)} · ${c?.files || 0} files · +${c?.add || 0} −${c?.del || 0}`;
+  $('#drawer-files').innerHTML = (c?.list || []).map((f) => `<li data-file="${esc(f.file)}"><span class="f">${esc(f.file)}</span>${f.untracked ? '<span class="new">new</span>' : `<span class="a">+${f.add}</span><span class="d">−${f.del}</span>`}</li>`).join('') || '<li class="none">No changes since the last commit.</li>';
+  $('#drawer-diff').innerHTML = '<span class="dim">Loading diff…</span>';
+  d.hidden = false;
+  const { patch } = await sb.diff(t.path);
+  $('#drawer-diff').innerHTML = patch ? patch.split('\n').map((l) => {
+    const cls = l.startsWith('diff --git') ? 'fh' : l.startsWith('@@') ? 'hk' : l.startsWith('+') && !l.startsWith('+++') ? 'ad' : l.startsWith('-') && !l.startsWith('---') ? 'dl' : /^(index|---|\+\+\+)/.test(l) ? 'mt' : '';
+    return `<span class="${cls}">${esc(l) || ' '}</span>`;
+  }).join('') : '<span class="dim">Nothing to show.</span>';
+}
+$('#drawer-close').addEventListener('click', () => { $('#drawer').hidden = true; focusedPane()?.term.focus(); });
+$('#drawer-files').addEventListener('click', (e) => {
+  const f = e.target.closest('[data-file]')?.dataset.file;
+  if (!f) return;
+  const target = [...$$('#drawer-diff .fh')].find((x) => x.textContent.includes(` b/${f}`));
+  target?.scrollIntoView({ block: 'start', behavior: 'smooth' });
 });
 
 // One tab per thing: reuse the project's existing Claude (or shell) tab instead of stacking duplicates.
@@ -880,7 +998,6 @@ function renderAttention() {
   sb.badge(attentionList().length);
   renderSidebar();
 }
-$('#needs').addEventListener('click', () => nextAttention());
 
 function revealPane(paneId) {
   const tab = tabOf(paneId);
@@ -888,6 +1005,13 @@ function revealPane(paneId) {
   if (tab.section !== active) setSection(tab.section, { quiet: true });
   tab.focus = paneId;
   showTab(tab.id);
+}
+
+function latestUnread() {
+  const list = [...panes.values()].filter((p) => (p.state === 'waiting' || p.unread) && !isSeen(p) && tabOf(p.id))
+    .sort((a, b) => (b.stateSince || 0) - (a.stateSince || 0));
+  if (!list.length) return toast('All caught up');
+  revealPane(list[0].id);
 }
 
 function nextAttention() {
@@ -959,7 +1083,7 @@ function paletteSource() {
       items.push({
         group: 'Projects', key: proj.name, title: proj.name, sub: proj.path, section: s,
         icon: `<span class="ic">${ICON_FOLDER}</span>`,
-        run: () => openOnce(s, proj, 'claude'),
+        run: () => { if (s !== active) setSection(s, { quiet: true }); openComposer(proj); },
         alt: () => openOnce(s, proj, 'claude'),
       });
     }
@@ -1123,12 +1247,17 @@ function menuAction(action, arg) {
     case 'settings': openSettings(); break;
     case 'quit-all': confirmQuitAll(); break;
     case 'lock': Portal.lock(); break;
+    case 'compose': openComposer(); break;
+    case 'archive': archiveTask(t); break;
+    case 'changes': openDrawer(); break;
+    case 'latest-unread': latestUnread(); break;
   }
 }
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    for (const id of ['palette', 'settings', 'confirm']) if (!$('#' + id).hidden) { closeOverlay($('#' + id)); e.preventDefault(); }
+    for (const id of ['palette', 'settings', 'confirm', 'composer']) if (!$('#' + id).hidden) { closeOverlay($('#' + id)); e.preventDefault(); }
+    if (!$('#drawer').hidden) { $('#drawer').hidden = true; e.preventDefault(); }
   }
 });
 
@@ -1227,10 +1356,10 @@ new ResizeObserver(debounce(() => { const t = currentTab(); if (t) refit(t); }, 
 $$('#seg button').forEach((b) => b.addEventListener('click', () => setSection(b.dataset.section)));
 $('#search').addEventListener('click', openPalette);
 $('#empty-palette').addEventListener('click', openPalette);
-$('#empty-claude').addEventListener('click', () => {
-  const first = cfg.sections[active].projects[0];
-  openTab(active, first || { name: 'Home', path: '~' }, { claude: true });
-});
+$('#empty-claude').addEventListener('click', () => openComposer());
+$('#new-task').addEventListener('click', () => openComposer());
+$('#archive-btn').addEventListener('click', () => archiveTask(currentTab()));
+$('#changes-btn').addEventListener('click', openDrawer);
 $('#add').addEventListener('click', addProject);
 $('#home-shell').addEventListener('click', () => openTab(active, { name: 'Home', path: '~' }));
 $('#settings-btn').addEventListener('click', openSettings);
@@ -1260,7 +1389,7 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   const restored = { live: 0, resumed: 0 };
   for (const st of saved.tabs || []) {
     const ids = leaves(st.root);
-    const tab = { id: st.id, section: st.section, name: st.name, path: st.path, root: stripTree(st.root), focus: st.focus };
+    const tab = { id: st.id, section: st.section, name: st.name, path: st.path, root: stripTree(st.root), focus: st.focus, createdAt: st.createdAt || Date.now() };
     const recs = collect(st.root);
     tabs.push(tab);
     for (const id of ids) {
@@ -1314,6 +1443,8 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   refreshGit();
   setInterval(scanScreens, 700);
   setInterval(refreshGit, 20000);
+  refreshChanges(); setInterval(refreshChanges, 15000);
+  setInterval(() => { $('#tree').dataset.html = ''; renderSidebar(); renderCrumb(); }, 30000);
   setInterval(() => renderAttention(), 30000);
   const portalStats = () => {
     const live = panes.size, claude = [...panes.values()].filter((p) => p.claudeRunning).length;
