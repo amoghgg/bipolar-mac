@@ -44,10 +44,12 @@ const Portal = (() => {
       v.srcObject = stream;
       await v.play();
       el('portal').classList.add('live');
+      window.PortalMesh?.start(v, el('pt-mesh')).then((ok) => el('portal').classList.toggle('meshed', !!ok));
       return true;
     } catch { return false; }
   }
   function stopCamera() {
+    window.PortalMesh?.stop();
     stream?.getTracks().forEach((t) => t.stop());
     stream = null;
     el('portal').classList.remove('live');
@@ -74,6 +76,7 @@ const Portal = (() => {
         await wait(900);
         continue;
       }
+      window.PortalMesh?.setState(!r.face ? 'scan' : r.match ? 'match' : r.similarity > 0.3 ? 'near' : 'scan');
       if (!r.face) { streak = 0; setRing(0.04); say('Step into the light. I can’t see your face.'); }
       else if (r.match) {
         streak++; setRing(r.similarity);
@@ -115,11 +118,13 @@ const Portal = (() => {
 
   async function open(how) {
     running = false;
-    el('portal').classList.add('opening');
     setRing(1);
+    if (how === 'face') { window.PortalMesh?.setState('match'); say('Recognised. Welcome back.', 'ok'); await wait(650); }
+    el('portal').classList.add('opening');
+    await wait(250);
     stopCamera();
     sb.face.down();
-    await wait(1150);
+    await wait(900);
     el('portal').hidden = true;
     el('portal').classList.remove('opening');
     document.body.classList.remove('locked');

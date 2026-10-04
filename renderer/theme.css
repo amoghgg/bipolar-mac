@@ -223,3 +223,8 @@ body.locked #app { filter: blur(28px) saturate(.6); transform: scale(.965); opac
 @media (prefers-reduced-motion: reduce) {
   .pt-aura i, .pt-ticks, .pt-scan, .pt-idle i { animation: none !important; }
 }
+
+/* live face net drawn over the feed */
+#pt-mesh { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; }
+#portal.meshed .pt-scan { display: none; }
+#portal.meshed #pt-video { filter: grayscale(1) contrast(1.15) brightness(.6); }
