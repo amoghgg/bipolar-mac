@@ -1298,9 +1298,10 @@ async function runImport() {
     if (!it.session || [...panes.values()].some((p) => p.claudeSession === it.session)) continue;
     const section = SECTIONS.includes(it.section) ? it.section : active;
     const id = await sb.uuid();
-    const tab = { id: 't' + id.slice(0, 8), section, name: it.title || 'Claude', path: it.cwd || '~', root: { k: 'pane', id }, focus: id };
+    // `project` groups the tab under a sidebar project; `cwd` is where the conversation lives.
+    const tab = { id: 't' + id.slice(0, 8), section, name: it.title || 'Claude', path: it.project || it.cwd || '~', root: { k: 'pane', id }, focus: id };
     tabs.push(tab);
-    const p = makePane({ id, section, name: tab.name, path: tab.path });
+    const p = makePane({ id, section, name: tab.name, path: it.cwd || '~' });
     p.claudeSession = it.session;
     renderView(tab);
     const [alive] = it.pid ? await sb.pidAlive([it.pid]) : [false];
