@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "productName": "Switchboard",
+  "productName": "Bipolar",
   "version": "0.1.0",
   "description": "Terminal workspace with separate Office and Personal sections",
   "main": "main.js",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "package": "electron-packager . Switchboard --platform=darwin --arch=arm64 --overwrite --out=dist --icon=build/icon.icns --app-bundle-id=com.amoghbajpai.switchboard --no-asar --extend-info=build/Info.extra.plist --ignore=^/dist --ignore=^/\\.git && rm -rf /Applications/Switchboard.app && cp -R dist/Switchboard-darwin-arm64/Switchboard.app /Applications/ && chmod +x /Applications/Switchboard.app/Contents/Resources/app/node_modules/node-pty/prebuilds/darwin-*/spawn-helper",
+    "package": "electron-packager . Bipolar --platform=darwin --arch=arm64 --overwrite --out=dist --icon=build/icon.icns --app-bundle-id=com.amoghbajpai.switchboard --no-asar --extend-info=build/Info.extra.plist --ignore=^/dist --ignore=^/\\.git && rm -rf /Applications/Bipolar.app && cp -R dist/Bipolar-darwin-arm64/Bipolar.app /Applications/ && chmod +x /Applications/Bipolar.app/Contents/Resources/app/node_modules/node-pty/prebuilds/darwin-*/spawn-helper",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper"
   },
   "dependencies": {

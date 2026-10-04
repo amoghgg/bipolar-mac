@@ -208,7 +208,7 @@ function createWindow() {
     height: 920,
     minWidth: 820,
     minHeight: 520,
-    title: 'Switchboard',
+    title: 'Bipolar',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 18, y: 19 },
     vibrancy: 'sidebar',
@@ -255,12 +255,12 @@ function buildMenu() {
   const send = (action, arg) => () => win && win.webContents.send('menu', action, arg);
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
-      label: 'Switchboard',
+      label: 'Bipolar',
       submenu: [
         { role: 'about' },
         { type: 'separator' },
         { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('settings') },
-        { label: 'Lock Switchboard', accelerator: 'CmdOrCtrl+L', click: send('lock') },
+        { label: 'Lock Bipolar', accelerator: 'CmdOrCtrl+L', click: send('lock') },
         { type: 'separator' },
         { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
         { type: 'separator' },
@@ -369,7 +369,7 @@ ipcMain.handle('pty:spawn', (_e, { id, cwd, cols, rows, section, command }) => {
     ...daemonEnv(),
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
-    TERM_PROGRAM: 'Switchboard',
+    TERM_PROGRAM: 'Bipolar',
     TERM_PROGRAM_VERSION: app.getVersion(),
     SWITCHBOARD_PANE: id,
     SWITCHBOARD_SECTION: section,
@@ -564,7 +564,7 @@ ipcMain.handle('face:reset', () => { saveFace({ faceId: null }); return true; })
 ipcMain.handle('touchid', async () => {
   try {
     if (!systemPreferences.canPromptTouchID()) return { ok: false, error: 'Touch ID is not available' };
-    await systemPreferences.promptTouchID('open your Switchboard');
+    await systemPreferences.promptTouchID('open Bipolar');
     return { ok: true };
   } catch (e) { return { ok: false, error: 'Touch ID was cancelled' }; }
 });
@@ -574,7 +574,7 @@ ipcMain.handle('camera:access', async () => {
 });
 
 // ---------------------------------------------------------------- lifecycle
-app.setName('Switchboard');
+app.setName('Bipolar');
 app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark';
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'media'));
@@ -585,7 +585,7 @@ app.whenReady().then(async () => {
   watchHooks();
   watchImports();
   buildMenu();
-  try { await connectDaemon(); } catch (e) { dialog.showErrorBox('Switchboard', e.message); }
+  try { await connectDaemon(); } catch (e) { dialog.showErrorBox('Bipolar', e.message); }
   createWindow();
 });
 app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });

@@ -288,22 +288,11 @@ function setState(p, state, message = '') {
 function onClaudeEvent(id, ev) {
   const p = panes.get(id);
   if (!p) return;
-  if (ev.session) p.claudeSession = ev.session;
+  if (ev.session) p.claudeSession = ev.session; // follows /clear and /resume too
   p.hook = { ...ev, seen: Date.now() };
-  switch (ev.event) {
-    case 'SessionStart': p.claudeRunning = true; setState(p, 'idle'); break;
-    case 'UserPromptSubmit':
-    case 'PostToolUse': p.claudeRunning = true; setState(p, 'working'); break;
-    case 'Notification': {
-      const permission = /permission|approve|allow/i.test(ev.message || '');
-      p.message = ev.message || '';
-      setState(p, permission ? 'waiting' : 'done');
-      if (permission && !isSeen(p)) setUnread(p, 'waiting', ev.message);
-      break;
-    }
-    case 'Stop': setState(p, 'done'); break;
-    case 'SessionEnd': p.claudeRunning = false; p.hook = null; setState(p, 'shell'); break;
-  }
+  if (ev.event === 'SessionStart' || ev.event === 'UserPromptSubmit') p.claudeRunning = true;
+  if (ev.event === 'SessionEnd') { p.hook = null; }
+  scanScreens();
   persist();
 }
 
@@ -330,12 +319,19 @@ function scanScreens() {
   for (const p of panes.values()) {
     if (!p.claudeRunning) { if (p.state !== 'shell') setState(p, 'shell'); continue; }
     const txt = screenText(p);
-    const now = Date.now();
-    // Streaming an answer: output has been flowing steadily for a moment, not just echoing your typing.
-    const streaming = now - p.lastOut < 1500 && p.lastOut - (p.burstStart || 0) > 700 && p.lastOut - p.lastIn > 300;
-    if (WAIT_RE.test(txt) && !WORK_RE.test(txt)) setState(p, 'waiting', waitReason(txt));
-    else if (WORK_RE.test(txt) || streaming) setState(p, 'working');
-    else setState(p, 'idle');
+    const onScreenQuestion = WAIT_RE.test(txt) && !WORK_RE.test(txt);
+    const h = env.hooks && p.hook; // exact lifecycle events from Claude Code's hook
+    if (onScreenQuestion) setState(p, 'waiting', h?.event === 'Notification' && h.message ? h.message : waitReason(txt));
+    else if (h) {
+      const ev = h.event;
+      if (ev === 'UserPromptSubmit' || ev === 'PostToolUse') setState(p, 'working');
+      else if (ev === 'Notification' && /permission|approve|allow/i.test(h.message || '')) setState(p, 'waiting', h.message);
+      else setState(p, 'idle');
+    } else {
+      const now = Date.now();
+      const streaming = now - p.lastOut < 1500 && p.lastOut - (p.burstStart || 0) > 700 && p.lastOut - p.lastIn > 300;
+      setState(p, WORK_RE.test(txt) || streaming ? 'working' : 'idle');
+    }
   }
 }
 
@@ -1162,7 +1158,7 @@ function openSettings() {
   $('#set-notify').checked = cfg.ui.notify;
   $('#hooks-state').innerHTML = env.hooks
     ? 'On. Claude reports exactly when it is working, waiting for permission, or done.'
-    : 'Estimated from terminal activity. For exact status, register Switchboard’s hook with Claude Code: add <code>~/.config/switchboard/bin/sb-hook</code> as a hook for SessionStart, UserPromptSubmit, PostToolUse, Notification, Stop and SessionEnd.';
+    : 'Estimated from terminal activity. For exact status, register Bipolar’s hook with Claude Code: add <code>~/.config/switchboard/bin/sb-hook</code> as a hook for SessionStart, UserPromptSubmit, PostToolUse, Notification, Stop and SessionEnd.';
   el.hidden = false;
 }
 $('#settings').addEventListener('click', (e) => {
