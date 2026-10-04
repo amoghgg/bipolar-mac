@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('sb', {
     enroll: (img) => ipcRenderer.invoke('face:enroll', img),
     verify: (img) => ipcRenderer.invoke('face:verify', img),
     learn: (img) => ipcRenderer.invoke('face:learn', img),
+    warm: () => ipcRenderer.invoke('face:warm'),
+    remember: (img) => ipcRenderer.invoke('face:remember', img),
     reset: () => ipcRenderer.invoke('face:reset'),
   },
   touchId: () => ipcRenderer.invoke('touchid'),

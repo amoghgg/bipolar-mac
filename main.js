@@ -515,7 +515,7 @@ async function faceUp() {
     const log = fs.openSync(path.join(CONFIG_DIR, 'face-api.log'), 'a');
     // Detached: it outlives the window (like the session daemon) so reopening unlocks instantly.
     faceProc = spawnProc(c.python, ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(FACE_PORT)], {
-      cwd: c.apiDir, stdio: ['ignore', log, log], env: { ...daemonEnv() }, detached: true,
+      cwd: c.apiDir, stdio: ['ignore', log, log], env: { ...daemonEnv(), FACE_FAST: '1' }, detached: true,
     });
     faceProc.unref();
     faceProc.on('exit', () => { faceProc = null; });
@@ -559,6 +559,16 @@ ipcMain.handle('face:learn', async (_e, image) => {
   if (faceIds().length >= MAX_TEMPLATES) return { ok: false, error: 'enough templates' };
   try { const r = await register(image); faceLog(`learned a new reference (${faceIds().length} total)`); return r; } catch (e) { return { ok: false, error: e.message }; }
 });
+// Keep the model hot: macOS pages out idle processes, which made the first frame take seconds.
+const WARM_FILE = path.join(CONFIG_DIR, 'warm.jpg');
+async function faceWarm() {
+  if (process.env.SWITCHBOARD_SNAPSHOT || !fs.existsSync(WARM_FILE)) return;
+  try { await facePost('/face/search', { image: fs.readFileSync(WARM_FILE).toString('base64'), top_k: 1 }); } catch {}
+}
+setInterval(faceWarm, 60 * 1000);
+ipcMain.handle('face:warm', () => faceWarm());
+ipcMain.handle('face:remember', (_e, image) => { try { fs.writeFileSync(WARM_FILE, Buffer.from(image, 'base64'), { mode: 0o600 }); } catch {} });
+
 ipcMain.handle('face:verify', async (_e, image) => {
   const c = faceCfg();
   const ids = new Set(faceIds(c));

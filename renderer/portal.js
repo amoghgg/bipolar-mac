@@ -76,6 +76,7 @@ const Portal = (() => {
       // Two steady frames just under the bar also count (ArcFace puts other people far below 0.44).
       if (r.match || (r.similarity >= 0.44 && lastSim >= 0.44)) {
         if (r.similarity < 0.68) sb.face.learn(img);
+        sb.face.remember(img); // used only to keep the model warm between unlocks
         return open('face');
       }
       show('verifying', 'Verifying face…');
@@ -136,6 +137,7 @@ const Portal = (() => {
     show('looking', 'Look at your Mac');
     running = true;
     lastSim = 0;
+    sb.face.warm(); // wake the model while the camera starts
     const [cam, state, up] = await Promise.all([startCamera(), sb.face.state(), sb.face.up()]);
     if (!running) return;
     if (!cam) { running = false; return show('fail', 'No camera access. Use Touch ID, or allow the camera in System Settings › Privacy.', 'warn'); }
