@@ -498,8 +498,8 @@ const faceCfg = () => {
   return {
     apiDir: path.join(HOME, 'liveness-detection', 'backend'),
     python: path.join(HOME, 'miniforge3', 'bin', 'python3'),
-    threshold: 0.55,
     ...c,
+    threshold: 0.5,
   };
 };
 const saveFace = (patch) => fs.writeFileSync(FACE_FILE, JSON.stringify({ ...faceCfg(), ...patch }, null, 2));
@@ -538,29 +538,49 @@ async function facePost(route, body) {
   return { status: r.status, body: j };
 }
 
-ipcMain.handle('face:state', () => { const c = faceCfg(); return { enrolled: !!c.faceId, threshold: c.threshold }; });
+// Several reference templates (learned from real unlocks) and one 1:N search per frame.
+const faceIds = (c = faceCfg()) => [...new Set([...(c.faceIds || []), ...(c.faceId ? [c.faceId] : [])])];
+const MAX_TEMPLATES = 6;
+const faceLog = (line) => { try { fs.appendFileSync(path.join(CONFIG_DIR, 'face-unlock.log'), `${new Date().toISOString()} ${line}\n`); } catch {} };
+
+ipcMain.handle('face:state', () => { const c = faceCfg(); return { enrolled: faceIds(c).length > 0, threshold: c.threshold }; });
 ipcMain.handle('face:up', () => (process.env.SWITCHBOARD_SNAPSHOT ? { ok: true } : faceUp()));
 ipcMain.handle('face:down', () => {}); // kept warm while the app runs so unlocking takes ~1s; stopped on quit
-ipcMain.handle('face:enroll', async (_e, image) => {
-  try {
-    const r = await facePost('/face/register', { name: 'switchboard-owner', image, metadata: { app: 'switchboard' } });
-    if (r.status !== 200) return { ok: false, error: r.body.detail || `HTTP ${r.status}` };
-    saveFace({ faceId: r.body.face_id, enrolledAt: new Date().toISOString() });
-    return { ok: true };
-  } catch (e) { return { ok: false, error: e.message }; }
+async function register(image) {
+  const r = await facePost('/face/register', { name: 'switchboard-owner', image, metadata: { app: 'bipolar' } });
+  if (r.status !== 200) return { ok: false, error: r.body.detail || `HTTP ${r.status}` };
+  const c = faceCfg();
+  saveFace({ faceIds: [...faceIds(c), r.body.face_id].slice(-MAX_TEMPLATES), faceId: null, enrolledAt: c.enrolledAt || new Date().toISOString() });
+  return { ok: true };
+}
+ipcMain.handle('face:enroll', async (_e, image) => { try { return await register(image); } catch (e) { return { ok: false, error: e.message }; } });
+ipcMain.handle('face:learn', async (_e, image) => {
+  // After a successful but not-so-confident unlock, keep that frame as another reference.
+  if (faceIds().length >= MAX_TEMPLATES) return { ok: false, error: 'enough templates' };
+  try { const r = await register(image); faceLog(`learned a new reference (${faceIds().length} total)`); return r; } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('face:verify', async (_e, image) => {
   const c = faceCfg();
-  if (!c.faceId) return { ok: false, error: 'not enrolled' };
+  const ids = new Set(faceIds(c));
+  if (!ids.size) return { ok: false, error: 'not enrolled' };
+  const t0 = Date.now();
   try {
-    const r = await facePost('/face/verify', { face_id: c.faceId, image });
-    if (r.status === 422) return { ok: true, face: false, similarity: 0 };
-    if (r.status === 404) { saveFace({ faceId: null }); return { ok: false, error: 'enrolment lost' }; }
+    const r = await facePost('/face/search', { image, top_k: 25 });
     if (r.status !== 200) return { ok: false, error: r.body.detail || `HTTP ${r.status}` };
-    return { ok: true, face: true, similarity: r.body.similarity, match: r.body.similarity >= c.threshold };
+    if (!r.body.face_detected) { faceLog(`no face (${Date.now() - t0}ms)`); return { ok: true, face: false, similarity: 0 }; }
+    const mine = (r.body.matches || []).filter((m) => ids.has(m.face_id));
+    if (!mine.length && (r.body.matches || []).length < 25) {
+      // none of our templates came back at all: they were removed from the API's gallery
+      const listed = await fetch(`${FACE_URL}/face/list`).then((x) => x.json()).catch(() => null);
+      if (Array.isArray(listed) && !listed.some((f) => ids.has(f.face_id))) { saveFace({ faceIds: [], faceId: null }); return { ok: false, error: 'enrolment lost' }; }
+    }
+    const similarity = mine.length ? Math.max(...mine.map((m) => m.similarity)) : 0;
+    const match = similarity >= c.threshold;
+    faceLog(`sim ${similarity.toFixed(3)} ${match ? 'MATCH' : 'no'} (${Date.now() - t0}ms, ${ids.size} refs)`);
+    return { ok: true, face: true, similarity, match };
   } catch (e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('face:reset', () => { saveFace({ faceId: null }); return true; });
+ipcMain.handle('face:reset', () => { saveFace({ faceId: null, faceIds: [] }); return true; });
 ipcMain.handle('touchid', async () => {
   try {
     if (!systemPreferences.canPromptTouchID()) return { ok: false, error: 'Touch ID is not available' };

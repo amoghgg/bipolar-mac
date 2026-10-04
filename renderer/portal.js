@@ -12,7 +12,6 @@ const Portal = (() => {
     ['We shape our tools and thereafter our tools shape us.', 'John Culkin'],
     ['Have nothing in your house that you do not know to be useful, or believe to be beautiful.', 'William Morris'],
   ];
-  const STRONG = 0.62;           // one frame this sure is enough
   const el = (id) => document.getElementById(id);
   let stream = null;
   let running = false;
@@ -73,8 +72,12 @@ const Portal = (() => {
         continue;
       }
       if (!r.face) { lastSim = 0; show('looking', 'Look at your Mac'); await wait(120); continue; }
-      // Face found: a single strong frame, or two in a row above the threshold.
-      if (r.similarity >= STRONG || (r.match && lastSim >= 0.55)) return open('face');
+      // One frame over the bar is enough; a less-than-certain pass teaches the portal this look.
+      // Two steady frames just under the bar also count (ArcFace puts other people far below 0.44).
+      if (r.match || (r.similarity >= 0.44 && lastSim >= 0.44)) {
+        if (r.similarity < 0.68) sb.face.learn(img);
+        return open('face');
+      }
       show('verifying', 'Verifying face…');
       if (!r.match && ++misses > 6) { show('fail', 'Not recognised. Try again, or use Touch ID.', 'warn'); misses = 0; await wait(900); }
       lastSim = r.similarity;
