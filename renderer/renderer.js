@@ -159,9 +159,7 @@ function makePane({ id, section, name, path }) {
   term.onBinary((d) => sb.write(id, d));
   term.onResize(({ cols, rows }) => { if (!p.restoring) sb.resize(id, cols, rows); });
   term.onTitleChange((t) => { p.title = cleanTitle(t); renderTabs(); renderStatus(); });
-  term.onBell(() => {
-    if (p.claudeRunning && !isSeen(p)) setUnread(p, 'waiting', 'Claude needs your attention');
-  });
+
 
   term.attachCustomKeyEventHandler((e) => keyHandler(p, e));
   el.addEventListener('mousedown', () => focusPane(id), true);
@@ -279,19 +277,18 @@ function setUnread(p, kind, message) {
   renderAttention();
 }
 
-function setState(p, state) {
-  if (p.state === state) return;
+function setState(p, state, message = '') {
+  if (p.state === state && p.message === message) return;
   const prev = p.state;
   p.state = state;
-  if (state === 'working') p.workStart = p.workStart || Date.now();
-  if (state !== 'working') p.workStart = 0;
-  if (!isSeen(p)) {
-    if (state === 'waiting') setUnread(p, 'waiting', p.message || 'Waiting for your permission');
-    else if (state === 'done' && prev === 'working') setUnread(p, 'done', p.title ? `Finished: ${p.title}` : 'Finished');
+  p.message = message;
+  if (state === 'waiting' && prev !== 'waiting' && !isSeen(p) && cfg.ui.notify) {
+    const t = tabOf(p.id);
+    sb.notify({ title: `${t ? t.name : p.name} needs you`, body: message, paneId: p.id });
   }
-  if (state === 'working' && p.unread) { p.unread = null; renderAttention(); }
-  renderTabs();
-  renderProjects();
+  if (state === 'idle' && prev === 'working' && !isSeen(p)) p.unread = 'done';
+  if (state === 'working' || state === 'waiting') p.unread = null;
+  renderAttention();
   renderStatus();
 }
 
@@ -318,17 +315,34 @@ function onClaudeEvent(id, ev) {
   persist();
 }
 
-// Fallback heuristic when hooks aren't registered: Claude streams output while it works.
-function tickActivity() {
-  const now = Date.now();
+// Claude's own screen says what it's doing: "esc to interrupt" while working, and a
+// question with choices (permission, trust, menus) when it needs you.
+function screenText(p, lines = 24) {
+  const b = p.term.buffer.active;
+  const cursor = b.baseY + b.cursorY; // Claude draws its prompt/spinner around the cursor
+  const last = Math.min(b.length - 1, cursor + 6);
+  const out = [];
+  for (let y = Math.max(0, cursor - lines); y <= last; y++) out.push(b.getLine(y)?.translateToString(true) || '');
+  return out.join('\n');
+}
+// The spinner line, e.g. "✻ Prestidigitating… (3s · thinking)" or "… (esc to interrupt)".
+const WORK_RE = /esc to interrupt|^\s*[✻✶✳✢✽*·⏺]\s+\S[^\n]*…\s*\(\d+[smh]/m;
+const WAIT_RE = /Do you want to|Would you like to|Enter to confirm|❯\s*1\.\s*Yes|\(esc\)\s*$/m;
+function waitReason(txt) {
+  if (/trust this folder/i.test(txt)) return 'Asks you to trust this folder';
+  const q = txt.split('\n').map((l) => l.trim()).find((l) => /^Do you want to|^Would you like to/.test(l));
+  return q ? q.replace(/\s+/g, ' ').slice(0, 90) : 'Waiting for your answer';
+}
+function scanScreens() {
   for (const p of panes.values()) {
     if (!p.claudeRunning) { if (p.state !== 'shell') setState(p, 'shell'); continue; }
-    if (p.hook && env.hooks) continue; // precise source wins
-    // Only count output after you've sent Claude something; startup screens aren't work.
-    const streaming = p.lastIn > p.claudeSince && now - p.lastOut < 1600 && p.lastOut - p.lastIn > 450;
-    if (streaming) setState(p, 'working');
-    else if (p.state === 'working' && now - p.lastOut > 2500) setState(p, 'done');
-    else if (p.state === 'shell') setState(p, 'idle');
+    const txt = screenText(p);
+    const now = Date.now();
+    // Streaming an answer: output has been flowing steadily for a moment, not just echoing your typing.
+    const streaming = now - p.lastOut < 1500 && p.lastOut - (p.burstStart || 0) > 700 && p.lastOut - p.lastIn > 300;
+    if (WAIT_RE.test(txt) && !WORK_RE.test(txt)) setState(p, 'waiting', waitReason(txt));
+    else if (WORK_RE.test(txt) || streaming) setState(p, 'working');
+    else setState(p, 'idle');
   }
 }
 
@@ -443,8 +457,7 @@ function focusPane(id) {
     p.term.focus();
     if (p.unread) { p.unread = null; renderAttention(); }
   }
-  renderTabs();
-  renderProjects();
+  renderAttention();
   renderStatus();
 }
 
@@ -563,17 +576,19 @@ function tabSubtitle(tab) {
   if (!p) return '';
   if (p.waitPid) return 'Waiting for its Terminal window to close';
   if (p.claudeRunning) {
-    if (p.state === 'working') return p.title || 'Working…';
-    if (p.state === 'waiting') return 'Needs your permission';
-    return p.title || 'Claude';
+    if (p.state === 'waiting') return p.message || 'Needs your answer';
+    if (p.state === 'working') return p.title ? `Working · ${p.title}` : 'Working…';
+    return p.title || 'Ready';
   }
   if (p.proc && !/^(zsh|bash|fish|-zsh|login)$/.test(p.proc)) return p.proc;
   return p.path;
 }
 
 function renderTabs() {
-  const bar = $('#tabs');
+  const bar = $('#open-list');
   const list = tabs.filter((t) => t.section === active);
+  $('#open-empty').hidden = list.length > 0;
+  renderCrumb();
   const existing = new Map($$('.tab', bar).map((el) => [el.dataset.id, el]));
   const keep = new Set();
   list.forEach((t, i) => {
@@ -609,9 +624,23 @@ function renderTabs() {
       $('.x', el).addEventListener('click', (e) => { e.stopPropagation(); requestCloseTab(t.id); });
     }
     el.classList.toggle('on', t.id === current[active]);
+    const fp = panes.get(t.focus);
+    el.classList.toggle('waiting', !!fp && fp.claudeRunning && fp.state === 'waiting');
+    el.classList.toggle('working', !!fp && fp.claudeRunning && fp.state === 'working');
     if (bar.children[i] !== el) bar.insertBefore(el, bar.children[i] || null);
   });
   for (const [id, el] of existing) if (!keep.has(id)) el.remove();
+}
+
+function renderCrumb() {
+  const t = currentTab();
+  const p = t && panes.get(t.focus);
+  $('#crumb-glyph').innerHTML = t ? tabGlyph(p) : '';
+  $('#crumb-title').textContent = t ? t.name : '';
+  const sub = $('#crumb-sub');
+  sub.textContent = t ? tabSubtitle(t) : '';
+  sub.className = p && p.claudeRunning ? p.state : '';
+  $('#tabbar .tab-actions').style.visibility = t ? 'visible' : 'hidden';
 }
 
 function renameTab(t) {
@@ -722,7 +751,7 @@ function setSection(s, { quiet = false } = {}) {
   active = s;
   document.body.dataset.section = s;
   $$('#switch button').forEach((b) => b.classList.toggle('on', b.dataset.section === s));
-  $('#projects-title').textContent = `${LABEL[s]} projects`;
+  $('#projects-title').textContent = 'Start new';
   if (changed) {
     const ul = $('#projects');
     ul.classList.remove('stagger'); void ul.offsetWidth; ul.classList.add('stagger');
@@ -754,14 +783,13 @@ function renderProjects() {
     const sub = [
       g?.branch ? `<span class="branch">${esc(g.branch)}</span>` : `<span class="branch">${esc(proj.path.replace(/^~\//, ''))}</span>`,
       g?.dirty ? `<span class="dirty">${g.dirty} changed</span>` : '',
-      count ? `<span class="open">· ${count} open</span>` : '',
+      '',
     ].join('');
-    return `<li class="proj ${cur && cur.path === proj.path ? 'current' : ''}" data-i="${i}" style="--i:${i}" title="${esc(proj.path)}">
+    return `<li class="proj ${cur && cur.path === proj.path ? 'current' : ''} ${count ? 'has-open' : ''}" data-i="${i}" style="--i:${i}" title="${esc(proj.path)}">
       <span class="avatar" style="--av:${tint(active, proj.name)}">${esc(initial(proj.name))}${state ? `<i class="st" data-s="${state}"></i>` : ''}</span>
       <span class="meta"><span class="name">${esc(proj.name)}</span><span class="sub">${sub}</span></span>
       <span class="acts">
-        <button class="icon-btn" data-act="claude" title="New Claude session">${ICON.spark}</button>
-        <button class="icon-btn" data-act="shell" title="New shell">${ICON.prompt}</button>
+        <button class="icon-btn" data-act="shell" title="Open a plain shell here">${ICON.prompt}</button>
       </span></li>`;
   }).join('') || `<li class="proj-empty">Add a folder to start.</li>`;
   if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
@@ -781,7 +809,7 @@ $('#projects').addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (act === 'claude') openOnce(active, proj, 'claude');
   else if (act === 'shell') openOnce(active, proj, 'shell');
-  else focusOrOpen(proj);
+  else openOnce(active, proj, 'claude');
 });
 $('#projects').addEventListener('contextmenu', async (e) => {
   const li = e.target.closest('.proj[data-i]');
@@ -860,8 +888,8 @@ async function addProject() {
 
 function attentionList() {
   return [...panes.values()]
-    .filter((p) => p.unread || p.state === 'waiting')
-    .map((p) => ({ p, tab: tabOf(p.id), kind: p.state === 'waiting' ? 'waiting' : p.unread }))
+    .filter((p) => p.state === 'waiting' && !isSeen(p))
+    .map((p) => ({ p, tab: tabOf(p.id), kind: 'waiting' }))
     .filter((x) => x.tab);
 }
 
@@ -873,7 +901,7 @@ function renderAttention() {
   const ul = $('ul', sec);
   const html = list.map(({ p, tab, kind }) => `<li class="att ${kind}" data-pane="${p.id}">
       <i class="dot"></i>
-      <span><b>${esc(tab.name)}</b><small>${esc(kind === 'waiting' ? (p.message || 'Needs your permission') : (p.title ? `Done: ${p.title}` : 'Finished'))}</small></span>
+      <span><b>${esc(tab.name)}</b><small>${esc(p.message || 'Waiting for your answer')}</small></span>
       <span class="sec">${LABEL[tab.section]}</span></li>`).join('');
   if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
   sb.badge(list.length);
@@ -962,7 +990,7 @@ function paletteSource() {
       items.push({
         group: 'Projects', key: proj.name, title: proj.name, sub: proj.path, section: s,
         icon: `<span class="avatar" style="--av:${tint(s, proj.name)}">${esc(initial(proj.name))}</span>`,
-        run: () => { setSection(s, { quiet: true }); focusOrOpen(proj); },
+        run: () => openOnce(s, proj, 'claude'),
         alt: () => openOnce(s, proj, 'claude'),
       });
     }
@@ -1157,7 +1185,9 @@ $('#sash').addEventListener('mousedown', (e) => {
 sb.onData((id, d) => {
   const p = panes.get(id);
   if (!p || p.restoring) return;
-  p.lastOut = Date.now();
+  const now = Date.now();
+  if (now - p.lastOut > 400) p.burstStart = now; // a new run of output begins
+  p.lastOut = now;
   p.term.write(d);
 });
 sb.onExit((id, code) => {
@@ -1197,6 +1227,7 @@ $('#add').addEventListener('click', addProject);
 $('#home-shell').addEventListener('click', () => openTab(active, { name: 'Home', path: '~' }));
 $('#settings-btn').addEventListener('click', openSettings);
 $('#new-tab').addEventListener('click', () => menuAction('new-tab'));
+$('#close-btn').addEventListener('click', () => menuAction('close-tab'));
 $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 'row'));
 
 (async function boot() {
@@ -1269,7 +1300,7 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   setInterval(watchHandoffs, 1500);
   renderAttention();
   refreshGit();
-  setInterval(tickActivity, 500);
+  setInterval(scanScreens, 700);
   setInterval(refreshGit, 20000);
   setInterval(() => renderAttention(), 30000);
   if (restored.resumed) toast(`Resumed ${restored.resumed} Claude conversation${restored.resumed > 1 ? 's' : ''} after restart`);

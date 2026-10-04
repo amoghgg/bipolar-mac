@@ -32,13 +32,19 @@
 
       <div id="scroller">
         <section id="attention" hidden>
-          <h2>Waiting on you <span class="n"></span></h2>
+          <h2>Needs you <span class="n"></span></h2>
           <ul></ul>
+        </section>
+
+        <section id="open-wrap">
+          <h2><span>Open</span></h2>
+          <ul id="open-list"></ul>
+          <p id="open-empty" class="hint-row">Nothing open. Pick a project below to start Claude.</p>
         </section>
 
         <section id="projects-wrap">
           <h2>
-            <span id="projects-title">Projects</span>
+            <span id="projects-title">Start new</span>
             <button id="add" class="icon-btn" title="Add a project folder">
               <svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg>
             </button>
@@ -61,13 +67,16 @@
 
     <main id="stage">
       <header id="tabbar" class="drag">
-        <div id="tabs"></div>
+        <div id="crumb"><span id="crumb-glyph"></span><div><b id="crumb-title"></b><small id="crumb-sub"></small></div></div>
         <div class="tab-actions">
-          <button id="new-tab" class="icon-btn" title="New tab (⌘T)">
-            <svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg>
+          <button id="new-tab" class="pill-btn" title="Open a plain shell in this folder (⌘T)">
+            <svg viewBox="0 0 20 20"><path d="m4.5 6 4 4-4 4M10.5 14.5h5"/></svg><span>Shell</span>
           </button>
           <button id="split-btn" class="icon-btn" title="Split right (⌘D) · Split down (⇧⌘D)">
             <svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2.5"/><path d="M10 4v12"/></svg>
+          </button>
+          <button id="close-btn" class="icon-btn" title="Close (⇧⌘W)">
+            <svg viewBox="0 0 20 20"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
           </button>
         </div>
       </header>
@@ -77,7 +86,7 @@
         <div id="empty">
           <div class="orb"><i></i></div>
           <h1 id="empty-title">Office is quiet</h1>
-          <p>Open a project from the sidebar to start a shell, or start Claude in one.</p>
+          <p>Click a project in the sidebar to start Claude there.</p>
           <div class="empty-actions">
             <button id="empty-claude" class="primary"><svg viewBox="0 0 20 20"><path d="M10 2.5 11.6 8.4 17.5 10l-5.9 1.6L10 17.5l-1.6-5.9L2.5 10l5.9-1.6z"/></svg>New Claude session</button>
             <button id="empty-palette" class="secondary">Jump to a project <kbd>⌘P</kbd></button>
