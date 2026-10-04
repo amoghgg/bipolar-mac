@@ -1,5 +1,6 @@
-/* The portal: the landing screen. Work begins only after your face is recognised
-   by your own face API (or Touch ID). Sessions keep running behind it. */
+/* The portal: Bipolar's landing screen. Unlocks with your own face API (kept warm in
+   the background) or Touch ID, Face-ID style: no camera preview, just a glyph and
+   three words — look, verifying, verified. Sessions keep running behind it. */
 'use strict';
 
 const Portal = (() => {
@@ -9,15 +10,16 @@ const Portal = (() => {
     ['Complicating is easy, simplifying is difficult.', 'Bruno Munari'],
     ['Art is something that makes you breathe with a different kind of happiness.', 'Anni Albers'],
     ['We shape our tools and thereafter our tools shape us.', 'John Culkin'],
-    ['Design is not just what it looks like and feels like. Design is how it works.', 'Steve Jobs'],
     ['Have nothing in your house that you do not know to be useful, or believe to be beautiful.', 'William Morris'],
   ];
+  const STRONG = 0.62;           // one frame this sure is enough
   const el = (id) => document.getElementById(id);
   let stream = null;
   let running = false;
-  let streak = 0;
   let mode = 'verify';
+  let lastSim = 0;
   let onOpen = () => {};
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function greeting() {
     const h = new Date().getHours();
@@ -28,103 +30,89 @@ const Portal = (() => {
     el('pt-time').textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     el('pt-date').textContent = d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' }).toLowerCase();
   }
-  function say(text, tone = '') {
+  function show(state, text, tone = '') {
+    el('pt-fid').dataset.state = state;
     const s = el('pt-status');
     s.textContent = text;
     s.dataset.tone = tone;
   }
-  function setRing(v) { el('portal').style.setProperty('--match', Math.max(0, Math.min(1, v)).toFixed(3)); }
 
   async function startCamera() {
     if (stream) return true;
     if (!(await sb.cameraAccess())) return false;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 960, height: 720, facingMode: 'user' }, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: false });
       const v = el('pt-video');
       v.srcObject = stream;
       await v.play();
-      el('portal').classList.add('live');
-      window.PortalMesh?.start(v, el('pt-mesh')).then((ok) => el('portal').classList.toggle('meshed', !!ok));
       return true;
     } catch { return false; }
   }
-  function stopCamera() {
-    window.PortalMesh?.stop();
-    stream?.getTracks().forEach((t) => t.stop());
-    stream = null;
-    el('portal').classList.remove('live');
-  }
+  function stopCamera() { stream?.getTracks().forEach((t) => t.stop()); stream = null; }
   function frame() {
     const v = el('pt-video');
     if (!v.videoWidth) return null;
     const c = document.createElement('canvas');
-    const w = 640; c.width = w; c.height = Math.round((v.videoHeight / v.videoWidth) * w);
+    c.width = 512; c.height = Math.round((v.videoHeight / v.videoWidth) * 512);
     c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-    return c.toDataURL('image/jpeg', 0.88).split(',')[1];
+    return c.toDataURL('image/jpeg', 0.85).split(',')[1];
   }
 
   async function loop() {
+    let misses = 0;
     while (running) {
+      if (mode === 'enroll') { await wait(150); continue; }
       const img = frame();
-      if (!img) { await wait(200); continue; }
-      if (mode === 'enroll') { await wait(200); continue; }
+      if (!img) { await wait(80); continue; }
       const r = await sb.face.verify(img);
       if (!running) return;
       if (!r.ok) {
         if (r.error === 'enrolment lost' || r.error === 'not enrolled') return askEnroll();
-        say('The face service hiccuped. Trying again…', 'warn');
-        await wait(900);
+        show('looking', 'Getting ready…');
+        await wait(400);
         continue;
       }
-      window.PortalMesh?.setState(!r.face ? 'scan' : r.match ? 'match' : r.similarity > 0.3 ? 'near' : 'scan');
-      if (!r.face) { streak = 0; setRing(0.04); say('Step into the light. I can’t see your face.'); }
-      else if (r.match) {
-        streak++; setRing(r.similarity);
-        say(streak >= 2 ? 'Recognised.' : 'Hold still…', 'ok');
-        if (streak >= 2) return open('face');
-      } else { streak = 0; setRing(r.similarity * 0.8); say('Not quite you. Look straight into the portal.', 'warn'); }
-      await wait(350);
+      if (!r.face) { lastSim = 0; show('looking', 'Look at your Mac'); await wait(120); continue; }
+      // Face found: a single strong frame, or two in a row above the threshold.
+      if (r.similarity >= STRONG || (r.match && lastSim >= 0.55)) return open('face');
+      show('verifying', 'Verifying face…');
+      if (!r.match && ++misses > 6) { show('fail', 'Not recognised. Try again, or use Touch ID.', 'warn'); misses = 0; await wait(900); }
+      lastSim = r.similarity;
     }
   }
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function askEnroll() {
     mode = 'enroll';
-    el('portal').classList.add('enrolling');
     el('pt-enroll').hidden = false;
-    say('First time here. Let the portal learn your face.');
+    show('looking', 'First time here. Bipolar needs to learn your face.');
   }
   async function enroll() {
     const img = frame();
-    if (!img) return say('The camera isn’t ready yet.', 'warn');
+    if (!img) return show('looking', 'The camera isn’t ready yet.', 'warn');
     el('pt-enroll').disabled = true;
-    say('Learning your face…');
+    show('verifying', 'Learning your face…');
     const r = await sb.face.enroll(img);
     el('pt-enroll').disabled = false;
-    if (!r.ok) return say(r.error === 'No face detected in the image' ? 'I couldn’t find a face. Face the camera in good light.' : `Couldn’t learn your face: ${r.error}`, 'warn');
-    el('portal').classList.remove('enrolling');
+    if (!r.ok) return show('fail', 'Couldn’t see a face clearly. Face the camera in good light.', 'warn');
     el('pt-enroll').hidden = true;
     mode = 'verify';
-    say('Learned. Now look again to open.', 'ok');
-    streak = 0;
+    show('looking', 'Learned. Look again to open.', 'ok');
   }
 
   async function touch() {
-    say('Waiting for Touch ID…');
+    show('verifying', 'Waiting for Touch ID…');
     const r = await sb.touchId();
     if (r.ok) return open('touch');
-    say(r.error, 'warn');
+    show('fail', r.error, 'warn');
   }
 
   async function open(how) {
     running = false;
-    setRing(1);
-    if (how === 'face') { window.PortalMesh?.setState('match'); say('Recognised. Welcome back.', 'ok'); await wait(650); }
-    el('portal').classList.add('opening');
-    await wait(250);
     stopCamera();
-    sb.face.down();
-    await wait(900);
+    show('verified', 'Verified', 'ok');
+    await wait(how === 'face' ? 520 : 300);
+    el('portal').classList.add('opening');
+    await wait(950);
     el('portal').hidden = true;
     el('portal').classList.remove('opening');
     document.body.classList.remove('locked');
@@ -134,24 +122,23 @@ const Portal = (() => {
   async function lock() {
     if (!el('portal').hidden && running) return;
     document.body.classList.add('locked');
-    const p = el('portal');
-    p.hidden = false;
-    p.classList.remove('opening');
-    setRing(0);
-    streak = 0;
+    el('portal').hidden = false;
+    el('portal').classList.remove('opening');
     const [q, who] = EPIGRAPHS[Math.floor(Date.now() / 864e5) % EPIGRAPHS.length];
     el('pt-quote').textContent = q;
     el('pt-quote-by').textContent = who;
     el('pt-greet').textContent = greeting();
     tickClock();
     el('pt-enroll').hidden = true;
-    say('Waking the portal…');
+    show('looking', 'Look at your Mac');
     running = true;
+    lastSim = 0;
     const [cam, state, up] = await Promise.all([startCamera(), sb.face.state(), sb.face.up()]);
     if (!running) return;
-    if (!cam) { running = false; return say('No camera access. Use Touch ID, or allow the camera in System Settings › Privacy.', 'warn'); }
-    if (!up.ok) { running = false; return say(`Face service unavailable (${up.error}). Use Touch ID.`, 'warn'); }
-    if (!state.enrolled) askEnroll(); else { mode = 'verify'; say('Look into the portal.'); }
+    if (!cam) { running = false; return show('fail', 'No camera access. Use Touch ID, or allow the camera in System Settings › Privacy.', 'warn'); }
+    if (!up.ok) { running = false; return show('fail', 'Face service unavailable. Use Touch ID.', 'warn'); }
+    mode = state.enrolled ? 'verify' : 'enroll';
+    if (!state.enrolled) askEnroll();
     loop();
   }
 

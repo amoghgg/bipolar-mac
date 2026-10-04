@@ -211,9 +211,7 @@ function createWindow() {
     title: 'Bipolar',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 18, y: 19 },
-    vibrancy: 'sidebar',
-    visualEffectState: 'active',
-    backgroundColor: '#00000000',
+    backgroundColor: '#07070a',
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -540,7 +538,7 @@ async function facePost(route, body) {
 
 ipcMain.handle('face:state', () => { const c = faceCfg(); return { enrolled: !!c.faceId, threshold: c.threshold }; });
 ipcMain.handle('face:up', () => (process.env.SWITCHBOARD_SNAPSHOT ? { ok: true } : faceUp()));
-ipcMain.handle('face:down', () => faceDown());
+ipcMain.handle('face:down', () => {}); // kept warm while the app runs so unlocking takes ~1s; stopped on quit
 ipcMain.handle('face:enroll', async (_e, image) => {
   try {
     const r = await facePost('/face/register', { name: 'switchboard-owner', image, metadata: { app: 'switchboard' } });
@@ -585,6 +583,7 @@ app.whenReady().then(async () => {
   watchHooks();
   watchImports();
   buildMenu();
+  if (!process.env.SWITCHBOARD_SNAPSHOT) faceUp(); // warm the face model in the background
   try { await connectDaemon(); } catch (e) { dialog.showErrorBox('Bipolar', e.message); }
   createWindow();
 });

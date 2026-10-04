@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="theme.css" />
+  <link rel="stylesheet" href="poles.css" />
 </head>
 <body data-section="office" class="booting locked">
   <div id="portal">
@@ -17,21 +18,24 @@
     </header>
     <main class="pt-center">
       <h1><em id="pt-greet">Welcome</em>, Amogh.</h1>
-      <div class="pt-aperture">
-        <div class="pt-ticks"></div>
-        <svg class="pt-arc" viewBox="0 0 400 400" aria-hidden="true">
-          <defs><linearGradient id="holoStroke" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#c6b6ff"/><stop offset=".4" stop-color="#93e4f6"/><stop offset=".75" stop-color="#ffbaa5"/><stop offset="1" stop-color="#f6a8d9"/>
+      <div class="fid" id="pt-fid" data-state="idle" aria-hidden="true">
+        <svg viewBox="0 0 120 120">
+          <defs><linearGradient id="fidHolo" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#c6b6ff"/><stop offset=".45" stop-color="#93e4f6"/><stop offset="1" stop-color="#ffbaa5"/>
           </linearGradient></defs>
-          <circle class="track" cx="200" cy="200" r="190"/>
-          <circle class="val" cx="200" cy="200" r="190"/>
+          <g class="corners">
+            <path d="M14 38V26a12 12 0 0 1 12-12h12"/><path d="M82 14h12a12 12 0 0 1 12 12v12"/>
+            <path d="M106 82v12a12 12 0 0 1-12 12H82"/><path d="M38 106H26a12 12 0 0 1-12-12V82"/>
+          </g>
+          <g class="face">
+            <path d="M44 46v8M76 46v8"/><path d="M61 46v20h-4"/><path d="M46 78c8 7 20 7 28 0"/>
+          </g>
+          <g class="ring">
+            <circle cx="60" cy="60" r="34"/>
+          </g>
+          <path class="check" d="M40 61l14 14 27-30"/>
         </svg>
-        <div class="pt-lens">
-          <div class="pt-idle"><i></i></div>
-          <video id="pt-video" muted playsinline></video>
-          <canvas id="pt-mesh"></canvas>
-          <div class="pt-scan"></div>
-        </div>
+        <video id="pt-video" muted playsinline></video>
       </div>
       <p id="pt-status"></p>
       <div class="pt-actions">
@@ -44,13 +48,14 @@
       <figure class="pt-quote"><blockquote id="pt-quote"></blockquote><figcaption id="pt-quote-by"></figcaption></figure>
     </footer>
   </div>
+  <div id="aurora" aria-hidden="true"><div class="pole office"><i></i><i></i><i></i></div><div class="pole personal"><i></i><i></i><i></i></div></div>
   <div id="app">
     <aside id="sidebar">
       <div class="titlebar-space drag"></div>
 
       <div id="seg" role="tablist" aria-label="Workspace">
-        <button data-section="office" role="tab" title="Office (⌘1)"><i class="sw office"></i>Office<i class="ping"></i></button>
-        <button data-section="personal" role="tab" title="Personal (⌘2)"><i class="sw personal"></i>Personal<i class="ping"></i></button>
+        <button data-section="office" role="tab" title="Office (⌘1)">Office<i class="ping"></i></button>
+        <button data-section="personal" role="tab" title="Personal (⌘2)">Personal<i class="ping"></i></button>
       </div>
 
       <nav id="nav">
@@ -184,7 +189,6 @@
   <script src="../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
   <script src="../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
   <script src="../node_modules/@xterm/addon-clipboard/lib/addon-clipboard.js"></script>
-  <script type="module" src="mesh.mjs"></script>
   <script src="portal.js"></script>
   <script src="renderer.js"></script>
 </body>
