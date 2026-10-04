@@ -513,9 +513,11 @@ async function faceUp() {
   if (!fs.existsSync(c.apiDir)) return { ok: false, error: `Face API not found at ${c.apiDir}` };
   if (!faceProc) {
     const log = fs.openSync(path.join(CONFIG_DIR, 'face-api.log'), 'a');
+    // Detached: it outlives the window (like the session daemon) so reopening unlocks instantly.
     faceProc = spawnProc(c.python, ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(FACE_PORT)], {
-      cwd: c.apiDir, stdio: ['ignore', log, log], env: { ...daemonEnv() },
+      cwd: c.apiDir, stdio: ['ignore', log, log], env: { ...daemonEnv() }, detached: true,
     });
+    faceProc.unref();
     faceProc.on('exit', () => { faceProc = null; });
   }
   for (let i = 0; i < 120; i++) {           // buffalo_l takes a few seconds to load
@@ -590,4 +592,3 @@ app.whenReady().then(async () => {
 app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 app.on('before-quit', () => { app.isQuitting = true; });
 app.on('window-all-closed', () => app.quit()); // shells live on in the daemon
-app.on('will-quit', () => faceDown());
