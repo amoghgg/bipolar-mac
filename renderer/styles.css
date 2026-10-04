@@ -499,3 +499,98 @@ body.ready #stage { animation: stage-in 620ms var(--ease) 60ms both; }
   content: ''; position: absolute; right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: 50%;
   border: 2.5px solid #1f2022; background: var(--accent);
 }
+
+/* =====================================================================
+   Sidebar v3 — a quiet source list (macOS HIG / Linear density):
+   28px rows, two levels (project → its sessions), monochrome glyphs.
+   Colour only carries meaning: amber = needs you, accent spinner = working.
+   ===================================================================== */
+#sidebar { background: rgba(21, 22, 23, 0.9); }
+#seg {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin: 2px 12px 10px; padding: 2px;
+  border-radius: 8px; background: rgba(255,255,255,.05);
+}
+#seg button {
+  position: relative; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 7px;
+  font: 500 12.5px/1 var(--font-ui); color: var(--text-3); transition: background var(--t-fast), color var(--t-fast);
+}
+#seg button:hover { color: var(--text-2); }
+#seg button.on { background: #3a3b3c; color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.35); }
+#seg .sw { width: 7px; height: 7px; border-radius: 50%; opacity: .45; }
+#seg .sw.office { background: #3b82ff; }
+#seg .sw.personal { background: #b26cff; }
+#seg button.on .sw { opacity: 1; }
+#seg .ping { display: none; position: absolute; top: 5px; right: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--waiting); }
+#seg button.alert .ping { display: block; }
+
+#nav { padding: 0 8px 6px; display: grid; gap: 1px; }
+.row {
+  position: relative; display: flex; align-items: center; gap: 9px; width: 100%; height: 28px; padding: 0 8px;
+  border-radius: 6px; color: var(--text-2); font: 400 13px/1 var(--font-ui); text-align: left; cursor: default;
+}
+.row:hover { background: rgba(255,255,255,.045); }
+.row svg { width: 15px; height: 15px; color: var(--text-3); flex: none; }
+.row .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row kbd { background: none; border: 0; padding: 0; font-size: 11.5px; color: var(--text-3); opacity: 0; }
+.row:hover kbd { opacity: 1; }
+.row.needs { color: var(--waiting); }
+.row.needs kbd { opacity: 1; color: color-mix(in srgb, var(--waiting) 70%, transparent); }
+
+#scroller { border-top: 1px solid rgba(255,255,255,.05); padding-top: 6px; }
+#tree { list-style: none; margin: 0; padding: 0 8px 12px; }
+#tree li { list-style: none; }
+.grp {
+  display: flex; align-items: center; gap: 6px; height: 28px; margin-top: 10px; padding: 0 8px;
+  font: 600 11.5px/1 var(--font-ui); color: var(--text-3); border-radius: 6px;
+}
+.grp.fold:hover { color: var(--text-2); }
+.grp .chev { width: 10px; height: 10px; transition: transform var(--t-fast) var(--ease); }
+.grp.open .chev { transform: rotate(90deg); }
+.grp .n { margin-left: auto; font-weight: 500; }
+
+.row.proj { color: var(--text); font-weight: 500; }
+.row.proj.dim { color: var(--text-2); font-weight: 400; }
+.row.proj .acts { display: none; gap: 2px; margin-right: -4px; }
+.row.proj:hover .acts { display: flex; }
+.row .acts button { width: 22px; height: 22px; border-radius: 5px; display: grid; place-items: center; color: var(--text-3); }
+.row .acts button:hover { background: rgba(255,255,255,.1); color: var(--text); }
+.row .acts svg { width: 13px; height: 13px; }
+
+.row.sess { padding-left: 32px; height: 28px; }
+.row.sess.two { height: 42px; align-items: center; }
+.row.sess .txt { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.row.sess .txt small { font-size: 11.5px; color: var(--waiting); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.sess.on { background: rgba(255,255,255,.085); color: var(--text); }
+.row.sess.on::before {
+  content: ''; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 2px; background: var(--accent);
+}
+.row.sess .x { display: none; width: 20px; height: 20px; border-radius: 5px; place-items: center; color: var(--text-3); margin-right: -4px; }
+.row.sess:hover .x { display: grid; }
+.row.sess:hover .tail { display: none; }
+.row.sess .x:hover { background: rgba(255,255,255,.1); color: var(--text); }
+.row.sess .x svg { width: 12px; height: 12px; }
+.row.sess .tail { font-size: 11.5px; color: var(--text-3); }
+.row.sess.waiting .tail { color: var(--waiting); }
+.row input { flex: 1; min-width: 0; height: 22px; padding: 0 6px; border: 0; border-radius: 5px; outline: 1.5px solid var(--accent); background: #2a2b2d; font: inherit; color: var(--text); }
+
+/* status glyphs: one 15px slot, always aligned */
+.st { position: relative; width: 15px; height: 15px; flex: none; display: grid; place-items: center; }
+.st::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); opacity: .55; }
+.st.shell::before { content: '›'; width: auto; height: auto; background: none; opacity: 1; color: var(--text-3); font: 600 14px/1 var(--font-mono); margin-top: -2px; }
+.st.idle::before { opacity: .9; background: var(--text-2); }
+.st.done::before { background: var(--done); opacity: 1; }
+.st.waiting::before { background: var(--waiting); opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, var(--waiting) 22%, transparent); }
+.st.working::before {
+  width: 11px; height: 11px; background: none; opacity: 1; border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent);
+  animation: turn .8s linear infinite;
+}
+@keyframes turn { to { transform: rotate(360deg); } }
+
+.side-foot { display: flex; align-items: center; gap: 2px; padding: 8px 10px 10px; border-top: 1px solid rgba(255,255,255,.05); }
+.side-foot .grow { flex: 1; }
+.foot-btn { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px; border-radius: 6px; color: var(--text-3); font-size: 12.5px; }
+.foot-btn:hover { background: rgba(255,255,255,.045); color: var(--text-2); }
+.foot-btn svg { width: 14px; height: 14px; }
+.side-foot .icon-btn { width: 28px; height: 28px; }
+.side-foot .icon-btn svg { width: 15px; height: 15px; }

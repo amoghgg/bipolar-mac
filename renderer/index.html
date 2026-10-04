@@ -12,50 +12,30 @@
     <aside id="sidebar">
       <div class="titlebar-space drag"></div>
 
-      <div id="switch" role="tablist" aria-label="Workspace">
-        <div class="pill" aria-hidden="true"></div>
-        <button data-section="office" role="tab">
-          <svg viewBox="0 0 20 20"><path d="M3.5 17V5.2c0-.6.4-1 1-1.1l6-1.6c.6-.2 1.2.3 1.2 1V17M11.7 8h3.8c.6 0 1 .4 1 1v8M2 17h16M6.5 7.5h2M6.5 10.5h2M6.5 13.5h2"/></svg>
-          <span>Office</span><b class="count"></b>
-        </button>
-        <button data-section="personal" role="tab">
-          <svg viewBox="0 0 20 20"><path d="M3 9.2 10 3l7 6.2M5 7.6V17h10V7.6M8.2 17v-4.2c0-.5.4-1 1-1h1.6c.6 0 1 .5 1 1V17"/></svg>
-          <span>Personal</span><b class="count"></b>
-        </button>
+      <div id="seg" role="tablist" aria-label="Workspace">
+        <button data-section="office" role="tab" title="Office (⌘1)"><i class="sw office"></i>Office<i class="ping"></i></button>
+        <button data-section="personal" role="tab" title="Personal (⌘2)"><i class="sw personal"></i>Personal<i class="ping"></i></button>
       </div>
 
-      <button id="search" class="search">
-        <svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 3.3 3.3"/></svg>
-        <span>Jump to anything</span>
-        <kbd>⌘P</kbd>
-      </button>
+      <nav id="nav">
+        <button class="row util" id="search">
+          <svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 3.3 3.3"/></svg>
+          <span class="label">Search</span><kbd>⌘P</kbd>
+        </button>
+        <button class="row util needs" id="needs" hidden>
+          <i class="st waiting"></i><span class="label"></span><kbd>⌘J</kbd>
+        </button>
+      </nav>
 
-      <div id="scroller">
-        <section id="attention" hidden>
-          <h2>Needs you <span class="n"></span></h2>
-          <ul></ul>
-        </section>
-
-        <section id="open-wrap">
-          <h2><span>Open</span></h2>
-          <ul id="open-list"></ul>
-          <p id="open-empty" class="hint-row">Nothing open. Pick a project below to start Claude.</p>
-        </section>
-
-        <section id="projects-wrap">
-          <h2>
-            <span id="projects-title">Start new</span>
-            <button id="add" class="icon-btn" title="Add a project folder">
-              <svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg>
-            </button>
-          </h2>
-          <ul id="projects"></ul>
-        </section>
-      </div>
+      <div id="scroller"><ul id="tree" role="tree"></ul></div>
 
       <footer class="side-foot">
-        <button id="home-shell" class="ghost">
-          <svg viewBox="0 0 20 20"><path d="m4 6 4 4-4 4M10 14.5h6"/></svg>Home shell
+        <button id="add" class="foot-btn" title="Add a project folder">
+          <svg viewBox="0 0 20 20"><path d="M10 4.5v11M4.5 10h11"/></svg>Add project
+        </button>
+        <span class="grow"></span>
+        <button id="home-shell" class="icon-btn" title="Shell in your home folder">
+          <svg viewBox="0 0 20 20"><path d="m4.5 6 4 4-4 4M10.5 14.5h5"/></svg>
         </button>
         <button id="settings-btn" class="icon-btn" title="Settings (⌘,)">
           <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.6"/><path d="M10 2.5v2M10 15.5v2M17.5 10h-2M4.5 10h-2M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4M15.3 15.3l-1.4-1.4M6.1 6.1 4.7 4.7"/></svg>
