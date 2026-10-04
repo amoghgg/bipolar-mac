@@ -151,7 +151,11 @@ function makePane({ id, section, name, path }) {
   };
   panes.set(id, p);
 
-  term.onData((d) => { p.lastIn = Date.now(); sb.write(id, d); });
+  term.onData((d) => {
+    // Automatic terminal replies (focus, device-attribute queries) start with ESC; only real typing counts.
+    if (!/^\x1b\[(?:[IO]|\?[\d;]*c|>[\d;]*c|\d+;\d+R)$/.test(d)) p.lastIn = Date.now();
+    sb.write(id, d);
+  });
   term.onBinary((d) => sb.write(id, d));
   term.onResize(({ cols, rows }) => { if (!p.restoring) sb.resize(id, cols, rows); });
   term.onTitleChange((t) => { p.title = cleanTitle(t); renderTabs(); renderStatus(); });
