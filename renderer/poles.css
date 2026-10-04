@@ -163,3 +163,53 @@ body::after { opacity: .085; z-index: 95; }
 @keyframes fid-out { 100% { transform: scale(2.4); opacity: 0; filter: blur(8px); } }
 
 @media (prefers-reduced-motion: reduce) { #aurora .pole i { animation: none !important; } }
+
+/* ---------------------------------------------------------------- terminal colours */
+@font-face { font-family: 'SF Mono Terminal'; font-weight: 400; src: url('file:///System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts/SF-Mono-Regular.otf'); }
+@font-face { font-family: 'SF Mono Terminal'; font-weight: 400; font-style: italic; src: url('file:///System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts/SF-Mono-RegularItalic.otf'); }
+@font-face { font-family: 'SF Mono Terminal'; font-weight: 700; src: url('file:///System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts/SF-Mono-Bold.otf'); }
+@font-face { font-family: 'SF Mono Terminal'; font-weight: 700; font-style: italic; src: url('file:///System/Applications/Utilities/Terminal.app/Contents/Resources/Fonts/SF-Mono-BoldItalic.otf'); }
+
+#card { --term-bg: #0b0b0f; --term-fg: #e6e2ee; background: var(--term-bg); transition: background .5s ease; }
+#card .view { background: var(--term-bg); transition: background .5s ease; }
+#card.light { box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 50px 120px -40px rgba(0,0,0,.9), 0 0 60px -10px color-mix(in srgb, var(--term-bg) 40%, transparent); }
+#card.light #statusbar { color: color-mix(in srgb, var(--term-fg) 55%, transparent); }
+#card.light #statusbar .chip i { opacity: .8; }
+#card.light .term-host .xterm-viewport { scrollbar-color: rgba(0,0,0,.18) transparent; }
+#card.light .findbar { background: #fff; color: #222; }
+
+.pill-btn.swatch i { width: 13px; height: 13px; border-radius: 4px; background: var(--sw, #111); box-shadow: inset 0 0 0 1.5px var(--sw2, #eee), 0 0 0 1px rgba(255,255,255,.12); }
+.t-sub .sw { flex: none; width: 9px; height: 9px; border-radius: 3px; background: var(--sw); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sw2) 35%, transparent); }
+.t-sub > .sw + *::before { content: none !important; }
+
+.sheet.themes { width: min(820px, calc(100vw - 48px)); max-height: 84vh; overflow-y: auto; padding: 22px 24px 20px; }
+.sheet.themes header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
+.sheet.themes header small { display: block; margin-top: 6px; font: 400 11.5px var(--font-meta); color: var(--text-3); }
+.sheet.themes h4 { margin: 20px 0 10px; font: 400 11px/1 var(--font-meta); letter-spacing: .04em; color: var(--text-3); }
+.th-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.th { display: grid; gap: 7px; text-align: left; padding: 0; border-radius: 12px; }
+.th-prev {
+  display: block; height: 78px; padding: 10px 12px; border-radius: 11px; overflow: hidden;
+  background: var(--bg); color: var(--fg); font: 400 10.5px/1.55 'SF Mono Terminal', Menlo, monospace;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 10px 24px -14px rgba(0,0,0,.8);
+  transition: transform .2s cubic-bezier(.2,.8,.2,1), box-shadow .2s;
+}
+.th-prev b { font-weight: 700; }
+.th-prev i { font-style: normal; }
+.th:hover .th-prev { transform: translateY(-2px); }
+.th.on .th-prev { box-shadow: 0 0 0 2px var(--text), 0 12px 28px -14px rgba(0,0,0,.8); }
+.th-name { font: italic 400 15px/1 var(--font-display); color: var(--text-2); padding-left: 2px; }
+.th.on .th-name { color: var(--text); }
+#th-fonts { display: flex; flex-wrap: wrap; gap: 8px; }
+.fnt { display: grid; gap: 4px; padding: 10px 14px; border-radius: 10px; font-size: 14px; color: var(--text-2); background: rgba(236,232,255,.04); box-shadow: inset 0 0 0 1px var(--line); text-align: left; }
+.fnt small { font: 400 10px var(--font-meta); color: var(--text-3); }
+.fnt:hover { color: var(--text); }
+.fnt.on { color: var(--void); background: var(--text); box-shadow: none; }
+.fnt.on small { color: rgba(0,0,0,.5); }
+.th-auto { display: flex; gap: 14px; align-items: flex-start; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+.th-auto b { display: block; font-weight: 600; }
+.th-auto small { display: block; margin-top: 3px; color: var(--text-3); line-height: 1.45; }
+#card.light #sb-claude.working { color: #2f6f8f; }
+#card.light #sb-claude.waiting { color: #9a6514; }
+#card.light #sb-claude.done { color: #2f8a5b; }
+#card.light #sb-sessions .live { background: #2f8a5b; }

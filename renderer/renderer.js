@@ -29,15 +29,6 @@ const TINTS = {
   personal: ['#8f4bff', '#d6378c', '#f05a28', '#b23cd9', '#e0486b', '#7b5cff', '#f2994a', '#c2410c'],
 };
 
-const THEME = {
-  background: '#0b0b0f', foreground: '#e6e2ee', cursor: '#eeeaf4', cursorAccent: '#0b0b0f',
-  selectionBackground: 'rgba(198, 182, 255, 0.28)', selectionInactiveBackground: 'rgba(236,232,255,0.1)',
-  scrollbarSliderBackground: 'rgba(236,232,255,0.1)', scrollbarSliderHoverBackground: 'rgba(236,232,255,0.18)',
-  black: '#1a1a22', red: '#ff8c9b', green: '#8de6b8', yellow: '#f3c46f', blue: '#93b8ff',
-  magenta: '#d4b0ff', cyan: '#93e4f6', white: '#d6d2e0',
-  brightBlack: '#5f5b70', brightRed: '#ffa8b4', brightGreen: '#aef0cd', brightYellow: '#f8d591',
-  brightBlue: '#b3ceff', brightMagenta: '#e3c9ff', brightCyan: '#b5eefa', brightWhite: '#ffffff',
-};
 
 // ------------------------------------------------------------------ state
 let cfg;
@@ -74,7 +65,7 @@ const persist = debounce(() => {
   cfg.session = {
     active,
     current: { ...current },
-    tabs: tabs.map((t) => ({ id: t.id, section: t.section, name: t.name, path: t.path, focus: t.focus, createdAt: t.createdAt, root: ser(t.root) })),
+    tabs: tabs.map((t) => ({ id: t.id, section: t.section, name: t.name, path: t.path, focus: t.focus, createdAt: t.createdAt, theme: t.theme, root: ser(t.root) })),
   };
   sb.saveConfig(cfg);
 }, 300);
@@ -111,7 +102,7 @@ function makePane({ id, section, name, path }) {
   el.appendChild(host);
 
   const term = new Terminal({
-    fontFamily: cfg.ui.fontFamily,
+    fontFamily: fontCss(),
     fontSize: cfg.ui.fontSize,
     lineHeight: 1.18,
     letterSpacing: 0,
@@ -126,7 +117,7 @@ function makePane({ id, section, name, path }) {
     smoothScrollDuration: 0,
     minimumContrastRatio: 1,
     drawBoldTextInBrightColors: false,
-    theme: THEME,
+    theme: THEMES.get('night').colors,
   });
   const fit = new FitAddon.FitAddon();
   const search = new SearchAddon.SearchAddon();
@@ -356,24 +347,26 @@ function onProcs(procs) {
 }
 
 // ------------------------------------------------------------------ tabs
-async function openTab(section, proj, { claude = false, focus = true, prompt = null, resume = null, cwd = null } = {}) {
+async function openTab(section, proj, { claude = false, focus = true, prompt = null, resume = null, cwd = null, theme = null } = {}) {
   const id = await sb.uuid();
-  const tab = { id: 't' + id.slice(0, 8), section, name: proj.name, path: proj.path, root: { k: 'pane', id }, focus: id, createdAt: Date.now() };
+  const tab = { id: 't' + id.slice(0, 8), section, name: proj.name, path: proj.path, root: { k: 'pane', id }, focus: id, createdAt: Date.now(),
+    theme: theme || ((claude || resume) && cfg.ui.autoPastel !== false ? nextPastel() : 'night') };
   tabs.push(tab);
   const p = makePane({ id, section, name: proj.name, path: cwd || proj.path });
   let command = null;
   if (resume) {
     p.claudeSession = resume;
-    command = `claude --resume ${resume}`;
+    command = claudeCmd(tab, `--resume ${resume}`);
   } else if (claude) {
     p.claudeSession = await sb.uuid();
-    command = `claude --session-id ${p.claudeSession}${prompt ? ' ' + shq(prompt) : ''}`;
+    command = claudeCmd(tab, `--session-id ${p.claudeSession}${prompt ? ' ' + shq(prompt) : ''}`);
   }
   if (focus) {
     if (section !== active) setSection(section, { quiet: true });
     current[section] = tab.id;
   }
   renderView(tab);
+  applyTheme(tab);
   showTab(focus ? tab.id : current[active]);
   await spawnPane(p, command);
   persist();
@@ -435,6 +428,7 @@ async function splitPane(dir) {
   tab.focus = id;
   const p = makePane({ id, section: tab.section, name: from.name, path: cwd });
   renderView(tab);
+  applyTheme(tab);
   showTab(tab.id);
   await spawnPane(p, null);
   persist();
@@ -584,6 +578,13 @@ function renderTabs() {
 
 function renderCrumb() {
   const t = currentTab();
+  const th = THEMES.get(t?.theme);
+  $('#card').style.setProperty('--term-bg', th.colors.background);
+  $('#card').style.setProperty('--term-fg', th.colors.foreground);
+  $('#card').classList.toggle('light', !!th.light);
+  $('#theme-btn').style.setProperty('--sw', th.colors.background);
+  $('#theme-btn').style.setProperty('--sw2', th.colors.foreground);
+  $('#theme-btn').hidden = !t;
   const p = t && panes.get(t.focus);
   const c = t && changes[t.path];
   const cb = $('#changes-btn');
@@ -617,7 +618,8 @@ function editInline(el, value, save) {
 async function tabMenu(t) {
   const other = t.section === 'office' ? 'personal' : 'office';
   const r = await sb.popup([
-    { id: 'rename', label: 'Rename Tab' },
+    { id: 'rename', label: 'Rename' },
+    { id: 'colour', label: 'Colour & Font…' },
     { id: 'move', label: `Move to ${LABEL[other]}` },
     '-',
     { id: 'reveal', label: 'Reveal in Finder' },
@@ -625,7 +627,8 @@ async function tabMenu(t) {
     '-',
     { id: 'close', label: 'Close Tab' },
   ]);
-  if (r === 'rename') renameTab(t);
+  if (r === 'colour') { showTab(t.id); openThemes(); }
+  else if (r === 'rename') renameTab(t);
   else if (r === 'move') {
     t.section = other;
     for (const id of leaves(t.root)) panes.get(id).section = other;
@@ -772,7 +775,7 @@ function taskRow(t, { showSection = false } = {}) {
     <i class="st ${st === 'moving' ? 'idle' : st}"></i>
     <div class="t-main">
       <div class="t-top"><span class="t-name">${esc(sessLabel(t))}</span>${since ? `<time>${esc(ago(since))}</time>` : ''}</div>
-      <div class="t-sub">${showSection ? `<span class="tag sec ${t.section}">${LABEL[t.section]}</span>` : ''}<span class="tag">${esc(projectOf(t))}</span>${st === 'waiting' ? '' : `<span class="t-line">${esc(taskLine(t))}</span>`}</div>${st === 'waiting' ? `<div class="t-ask">${esc(taskLine(t))}</div>` : ''}
+      <div class="t-sub"><i class="sw" style="--sw:${THEMES.get(t.theme).colors.background};--sw2:${THEMES.get(t.theme).colors.foreground}"></i>${showSection ? `<span class="tag sec ${t.section}">${LABEL[t.section]}</span>` : ''}<span class="tag">${esc(projectOf(t))}</span>${st === 'waiting' ? '' : `<span class="t-line">${esc(taskLine(t))}</span>`}</div>${st === 'waiting' ? `<div class="t-ask">${esc(taskLine(t))}</div>` : ''}
     </div>
     <button class="x" data-act="close" title="Close">${ICON.x}</button></li>`;
 }
@@ -844,6 +847,76 @@ function renameTab(t) {
   if (label) editInline(label, sessLabel(t), (v) => { t.name = v; persist(); });
 }
 
+// ------------------------------------------------------------------ themes & fonts
+const fontCss = () => (THEMES.FONTS.find((f) => f.id === cfg.ui.font) || THEMES.FONTS[0]).css;
+function nextPastel() {
+  const used = tabs.map((t) => t.theme);
+  const free = THEMES.PASTELS.filter((x) => !used.includes(x));
+  const pool = free.length ? free : THEMES.PASTELS;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+// Pastel paper needs Claude's light theme so its own greys stay readable.
+function claudeCmd(tab, args) {
+  const light = THEMES.get(tab?.theme).light;
+  return `claude${light ? ` --settings '{"theme":"light"}'` : ''} ${args}`;
+}
+function applyTheme(tab) {
+  const th = THEMES.get(tab.theme);
+  for (const id of leaves(tab.root)) {
+    const p = panes.get(id);
+    if (!p) continue;
+    p.term.options.theme = th.colors;
+    p.el.style.background = th.colors.background;
+  }
+  const v = $(`.view[data-tab="${tab.id}"]`);
+  if (v) v.style.background = th.colors.background;
+  if (tab.id === current[active]) renderCrumb();
+}
+function setTabTheme(tab, id) {
+  const before = THEMES.get(tab.theme);
+  tab.theme = id;
+  applyTheme(tab);
+  persist();
+  $('#tree').dataset.html = ''; renderSidebar();
+  const p = panes.get(tab.focus);
+  if (p?.claudeRunning && !!before.light !== !!THEMES.get(id).light) {
+    toast(THEMES.get(id).light ? 'Light paper: Claude switches to its light theme the next time this task starts' : 'Dark theme: Claude switches back to dark on its next start');
+  }
+}
+function themeCard(th, on) {
+  const c = th.colors;
+  return `<button class="th ${on ? 'on' : ''}" data-theme="${th.id}" style="--bg:${c.background};--fg:${c.foreground};--g:${c.green};--y:${c.yellow};--b:${c.blue};--m:${c.magenta};--r:${c.red}">
+    <span class="th-prev"><b>~ %</b> claude<br><i style="color:var(--g)">✓</i> tests passed<br><i style="color:var(--y)">●</i> <i style="color:var(--b)">2 files</i> <i style="color:var(--r)">−3</i></span>
+    <span class="th-name">${esc(th.name)}</span></button>`;
+}
+function openThemes() {
+  const t = currentTab();
+  const groups = ['Pastels', 'Apple Terminal', 'Loved', 'Bipolar'];
+  $('#th-groups').innerHTML = groups.map((g) => `<h4>${g === 'Apple Terminal' ? 'Your Mac’s Terminal' : g === 'Loved' ? 'Loved by everyone' : g}</h4>
+    <div class="th-grid">${THEMES.list.filter((x) => x.group === g).map((x) => themeCard(x, t && t.theme === x.id)).join('')}</div>`).join('');
+  $('#th-fonts').innerHTML = THEMES.FONTS.map((f) => `<button class="fnt ${cfg.ui.font === f.id ? 'on' : ''}" data-font="${f.id}" style="font-family:${f.css}">${esc(f.name)}<small>${esc(f.note)}</small></button>`).join('');
+  $('#th-auto').checked = cfg.ui.autoPastel !== false;
+  $('#th-sub').textContent = t ? `for “${sessLabel(t)}”` : 'pick a task first';
+  const el = $('#themes');
+  el.hidden = false;
+  el.classList.remove('closing');
+}
+$('#themes').addEventListener('click', (e) => {
+  if (e.target.id === 'themes' || e.target.closest('[data-close]')) return closeOverlay($('#themes'));
+  const th = e.target.closest('[data-theme]')?.dataset.theme;
+  if (th) { const t = currentTab(); if (t) setTabTheme(t, th); return openThemes(); }
+  const f = e.target.closest('[data-font]')?.dataset.font;
+  if (f) {
+    cfg.ui.font = f;
+    for (const p of panes.values()) p.term.options.fontFamily = fontCss();
+    const t = currentTab(); if (t) refit(t);
+    persist();
+    return openThemes();
+  }
+});
+$('#th-auto').addEventListener('change', (e) => { cfg.ui.autoPastel = e.target.checked; persist(); });
+$('#theme-btn').addEventListener('click', openThemes);
+
 // ------------------------------------------------------------------ archive
 async function archiveTask(t) {
   if (!t) return;
@@ -854,7 +927,7 @@ async function archiveTask(t) {
   }
   cfg.archive = cfg.archive || [];
   if (p?.claudeSession || p?.claudeRunning) {
-    cfg.archive.unshift({ id: t.id, name: sessLabel(t), section: t.section, path: t.path, cwd: p?.path || t.path, project: projectOf(t), claudeSession: p?.claudeSession || null, archivedAt: Date.now() });
+    cfg.archive.unshift({ id: t.id, name: sessLabel(t), section: t.section, path: t.path, cwd: p?.path || t.path, project: projectOf(t), claudeSession: p?.claudeSession || null, theme: t.theme, archivedAt: Date.now() });
     cfg.archive = cfg.archive.slice(0, 60);
   }
   closeTab(t.id);
@@ -865,7 +938,7 @@ async function resumeArchived(id) {
   if (i < 0) return;
   const a = cfg.archive[i];
   cfg.archive.splice(i, 1);
-  const tab = await openTab(a.section, { name: a.name, path: a.path }, { cwd: a.cwd, resume: a.claudeSession });
+  const tab = await openTab(a.section, { name: a.name, path: a.path }, { cwd: a.cwd, resume: a.claudeSession, theme: a.theme });
   tab.name = a.name;
   persist();
 }
@@ -1252,7 +1325,7 @@ function menuAction(action, arg) {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    for (const id of ['palette', 'settings', 'confirm', 'composer']) if (!$('#' + id).hidden) { closeOverlay($('#' + id)); e.preventDefault(); }
+    for (const id of ['palette', 'settings', 'confirm', 'composer', 'themes']) if (!$('#' + id).hidden) { closeOverlay($('#' + id)); e.preventDefault(); }
     if (!$('#drawer').hidden) { $('#drawer').hidden = true; e.preventDefault(); }
   }
 });
@@ -1367,8 +1440,8 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   Portal.init({ onOpen: () => { focusedPane()?.term.focus(); const t = currentTab(); if (t) requestAnimationFrame(() => refit(t)); } });
   Portal.lock();
   cfg = await sb.getConfig();
-  if (!cfg.ui.fontFamily || /SF Mono/.test(cfg.ui.fontFamily)) cfg.ui.fontFamily = "'JetBrains Mono', 'SF Mono', Menlo, monospace";
-  await document.fonts.load(`13px 'JetBrains Mono'`).catch(() => {});
+  cfg.ui.font = cfg.ui.font || 'sfmono'; // the Terminal.app font by default
+  await Promise.all(["13px 'SF Mono Terminal'", "bold 13px 'SF Mono Terminal'", "13px 'JetBrains Mono'", "13px 'Geist Mono'"].map((f) => document.fonts.load(f).catch(() => {})));
   env = await sb.env();
   if (cfg.ui.sideW) document.documentElement.style.setProperty('--side-w', cfg.ui.sideW + 'px');
   if (cfg.ui.sidebarHidden) document.body.classList.add('no-sidebar');
@@ -1385,7 +1458,7 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   const restored = { live: 0, resumed: 0 };
   for (const st of saved.tabs || []) {
     const ids = leaves(st.root);
-    const tab = { id: st.id, section: st.section, name: st.name, path: st.path, root: stripTree(st.root), focus: st.focus, createdAt: st.createdAt || Date.now() };
+    const tab = { id: st.id, section: st.section, name: st.name, path: st.path, root: stripTree(st.root), focus: st.focus, createdAt: st.createdAt || Date.now(), theme: st.theme || 'night' };
     const recs = collect(st.root);
     tabs.push(tab);
     for (const id of ids) {
@@ -1399,6 +1472,7 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
     }
     if (!ids.includes(tab.focus)) tab.focus = ids[0];
     renderView(tab);
+    applyTheme(tab);
   }
   // Shells the daemon still runs but the layout lost (e.g. crashed before saving).
   for (const meta of hello.panes) {
@@ -1421,12 +1495,13 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   for (const p of panes.values()) {
     if (p._restore === 'attach') { await attachPane(p); restored.live++; }
     else if (p._restore === 'resume') {
-      await spawnPane(p, `claude --resume ${p.claudeSession} || claude --session-id ${p.claudeSession}`);
+      const tb = tabOf(p.id);
+      await spawnPane(p, `${claudeCmd(tb, `--resume ${p.claudeSession}`)} || ${claudeCmd(tb, `--session-id ${p.claudeSession}`)}`);
       restored.resumed++;
     } else if (p._restore === 'prefill') {
       // Typed but not run: the conversation is still open elsewhere; press Enter once it's closed there.
       await spawnPane(p, null);
-      typeWhenReady(p, `claude --resume ${p.claudeSession}`);
+      typeWhenReady(p, claudeCmd(tabOf(p.id), `--resume ${p.claudeSession}`));
     } else await spawnPane(p, null);
     delete p._restore;
   }

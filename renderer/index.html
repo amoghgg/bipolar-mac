@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data:; media-src 'self' mediastream: blob:; font-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data:; media-src 'self' mediastream: blob:; font-src 'self' file:" />
   <title>Bipolar</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
@@ -91,6 +91,7 @@
       <header id="tabbar" class="drag">
         <div id="crumb"><span id="crumb-glyph"></span><div><b id="crumb-title"></b><small id="crumb-sub"></small></div></div>
         <div class="tab-actions">
+          <button id="theme-btn" class="pill-btn swatch" title="Colour & font for this task"><i></i><span>colour</span></button>
           <button id="changes-btn" class="pill-btn changes" hidden title="What changed in this project (⇧⌘C)"></button>
           <button id="archive-btn" class="pill-btn" title="Archive this task (⌘E)"><svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="4" rx="1.2"/><path d="M4.5 8v7.2c0 .7.6 1.3 1.3 1.3h8.4c.7 0 1.3-.6 1.3-1.3V8M8 11h4"/></svg><span>archive</span></button>
           <button id="new-tab" class="pill-btn" title="Open a plain shell in this folder (⌘T)">
@@ -157,6 +158,16 @@
     </div>
   </div>
 
+  <div id="themes" class="overlay" hidden>
+    <div class="sheet themes" role="dialog" aria-label="Colour and font">
+      <header><div><h3>Colour &amp; font</h3><small id="th-sub"></small></div><button class="icon-btn close" data-close><svg viewBox="0 0 20 20"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg></button></header>
+      <div id="th-groups"></div>
+      <h4>Font</h4>
+      <div id="th-fonts"></div>
+      <label class="th-auto"><input type="checkbox" id="th-auto" class="toggle" /><span><b>Every new task gets its own pastel</b><small>Like keeping each Terminal window a different colour, but automatic, and the colour follows the task into the sidebar.</small></span></label>
+    </div>
+  </div>
+
   <div id="settings" class="overlay" hidden>
     <div class="sheet narrow" role="dialog" aria-label="Settings">
       <header><h3>Settings</h3><button class="icon-btn close" data-close><svg viewBox="0 0 20 20"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg></button></header>
@@ -189,6 +200,7 @@
   <script src="../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
   <script src="../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
   <script src="../node_modules/@xterm/addon-clipboard/lib/addon-clipboard.js"></script>
+  <script src="themes.js"></script>
   <script src="portal.js"></script>
   <script src="renderer.js"></script>
 </body>
