@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('sb', {
   quitAll: () => ipcRenderer.invoke('quit-all'),
 
   claudeStates: () => ipcRenderer.invoke('claude:states'),
+  takeImport: () => ipcRenderer.invoke('import:take'),
+  pidAlive: (pids) => ipcRenderer.invoke('pid-alive', pids),
+  onImportReady: on('import:ready'),
   git: (paths) => ipcRenderer.invoke('git', paths),
   pickFolder: () => ipcRenderer.invoke('dialog:folder'),
   popup: (items) => ipcRenderer.invoke('menu:popup', items),

@@ -389,6 +389,21 @@ ipcMain.handle('claude:states', () => {
     }
   } catch {}
 });
+// Import: drop ~/.config/switchboard/import.json ([{session, section, title, cwd, pid}]) and
+// the app turns each entry into a tab that continues that Claude conversation.
+const IMPORT_FILE = path.join(CONFIG_DIR, 'import.json');
+ipcMain.handle('import:take', () => {
+  try {
+    const items = JSON.parse(fs.readFileSync(IMPORT_FILE, 'utf8'));
+    fs.unlinkSync(IMPORT_FILE);
+    return Array.isArray(items) ? items : [];
+  } catch { return []; }
+});
+ipcMain.handle('pid-alive', (_e, pids) => pids.map((pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }));
+function watchImports() {
+  fs.watch(CONFIG_DIR, (_t, name) => { if (name === 'import.json' && fs.existsSync(IMPORT_FILE)) win?.webContents.send('import:ready'); });
+}
+
 ipcMain.handle('quit-all', () => {
   rawSend({ t: 'shutdown' });
   app.isQuitting = true;
@@ -446,6 +461,7 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark';
   try { installHookScript(); } catch {}
   watchHooks();
+  watchImports();
   buildMenu();
   try { await connectDaemon(); } catch (e) { dialog.showErrorBox('Switchboard', e.message); }
   createWindow();

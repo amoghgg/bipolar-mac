@@ -81,7 +81,9 @@ const persist = debounce(() => {
 
 function paneRecord(p) {
   if (!p) return {};
-  return { path: p.path, name: p.name, claudeSession: p.claudeSession || null, wasClaude: !!p.claudeRunning };
+  const r = { path: p.path, name: p.name, claudeSession: p.claudeSession || null, wasClaude: !!p.claudeRunning };
+  if (p.waitPid) Object.assign(r, { prefill: true, waitPid: p.waitPid });
+  return r;
 }
 
 // ------------------------------------------------------------------ layout tree helpers
@@ -367,6 +369,23 @@ async function openTab(section, proj, { claude = false, focus = true } = {}) {
   return tab;
 }
 
+async function confirmCloseClaude(ids) {
+  const live = ids.map((id) => panes.get(id)).filter((p) => p && (p.claudeRunning || p.waitPid));
+  if (!live.length) return true;
+  return confirmBox({
+    title: live.length > 1 ? `Close ${live.length} Claude sessions?` : `Close this Claude session?`,
+    body: 'Claude stops in this tab. The conversation stays saved and can be resumed later with claude --resume.',
+    yes: 'Close',
+  });
+}
+async function requestCloseTab(tabId) {
+  const t = tabs.find((x) => x.id === tabId);
+  if (t && (await confirmCloseClaude(leaves(t.root)))) closeTab(tabId);
+}
+async function requestClosePane(paneId) {
+  if (await confirmCloseClaude([paneId])) closePane(paneId);
+}
+
 function closeTab(tabId) {
   const i = tabs.findIndex((t) => t.id === tabId);
   if (i < 0) return;
@@ -538,6 +557,7 @@ function tabGlyph(p) {
 function tabSubtitle(tab) {
   const p = panes.get(tab.focus);
   if (!p) return '';
+  if (p.waitPid) return 'Waiting for its Terminal window to close';
   if (p.claudeRunning) {
     if (p.state === 'working') return p.title || 'Working…';
     if (p.state === 'waiting') return 'Needs your permission';
@@ -561,7 +581,7 @@ function renderTabs() {
       el.dataset.id = t.id;
       el.draggable = true;
       el.addEventListener('click', () => showTab(t.id));
-      el.addEventListener('auxclick', (e) => { if (e.button === 1) closeTab(t.id); });
+      el.addEventListener('auxclick', (e) => { if (e.button === 1) requestCloseTab(t.id); });
       el.addEventListener('dblclick', () => renameTab(t));
       el.addEventListener('contextmenu', (e) => { e.preventDefault(); tabMenu(t); });
       el.addEventListener('dragstart', (e) => { el.classList.add('dragging'); e.dataTransfer.setData('text/tab', t.id); });
@@ -582,7 +602,7 @@ function renderTabs() {
     if (el.dataset.html !== html) {
       el.innerHTML = html;
       el.dataset.html = html;
-      $('.x', el).addEventListener('click', (e) => { e.stopPropagation(); closeTab(t.id); });
+      $('.x', el).addEventListener('click', (e) => { e.stopPropagation(); requestCloseTab(t.id); });
     }
     el.classList.toggle('on', t.id === current[active]);
     if (bar.children[i] !== el) bar.insertBefore(el, bar.children[i] || null);
@@ -628,7 +648,7 @@ async function tabMenu(t) {
     toast(`Moved to ${LABEL[other]}`);
   } else if (r === 'reveal') sb.reveal(t.path);
   else if (r === 'code') sb.openEditor(t.path);
-  else if (r === 'close') closeTab(t.id);
+  else if (r === 'close') requestCloseTab(t.id);
 }
 
 async function paneMenu(p) {
@@ -651,7 +671,7 @@ async function paneMenu(p) {
   else if (r === 'split-d') splitPane('col');
   else if (r === 'find') openFind(p);
   else if (r === 'clear') p.term.clear();
-  else if (r === 'close') closePane(p.id);
+  else if (r === 'close') requestClosePane(p.id);
 }
 
 // ------------------------------------------------------------------ find
@@ -1070,8 +1090,8 @@ function menuAction(action, arg) {
     case 'new-tab': openTab(active, proj); break;
     case 'new-claude': openTab(active, proj, { claude: true }); break;
     case 'split': splitPane(arg); break;
-    case 'close-pane': if (p) closePane(p.id); break;
-    case 'close-tab': if (t) closeTab(t.id); break;
+    case 'close-pane': if (p) requestClosePane(p.id); break;
+    case 'close-tab': if (t) requestCloseTab(t.id); break;
     case 'clear': p?.term.clear(); break;
     case 'select-all': p?.term.selectAll(); break;
     case 'find': openFind(p); break;
@@ -1187,6 +1207,7 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
       const rec = recs[id] || {};
       const p = makePane({ id, section: st.section, name: rec.name || st.name, path: rec.path || st.path });
       p.claudeSession = rec.claudeSession || null;
+      if (rec.waitPid) p.waitPid = rec.waitPid;
       p._restore = alive.has(id) ? 'attach'
         : rec.prefill && rec.claudeSession ? 'prefill'
         : rec.wasClaude && rec.claudeSession ? 'resume' : 'shell';
@@ -1226,6 +1247,9 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   }
   sb.procsNow();
   sb.claudeStates();
+  sb.onImportReady(runImport);
+  runImport();
+  setInterval(watchHandoffs, 1500);
   renderAttention();
   refreshGit();
   setInterval(tickActivity, 500);
@@ -1244,6 +1268,55 @@ function typeWhenReady(p, text) {
     else setTimeout(tick, 150);
   };
   setTimeout(tick, 300);
+}
+
+// ------------------------------------------------------------------ import & handoff
+// Tabs waiting for a conversation that is still open elsewhere (e.g. Terminal.app):
+// the resume command is typed and waits; when that process exits we press Enter.
+async function runImport() {
+  const items = await sb.takeImport();
+  if (!items.length) return;
+  let added = 0;
+  for (const it of items) {
+    if (!it.session || [...panes.values()].some((p) => p.claudeSession === it.session)) continue;
+    const section = SECTIONS.includes(it.section) ? it.section : active;
+    const id = await sb.uuid();
+    const tab = { id: 't' + id.slice(0, 8), section, name: it.title || 'Claude', path: it.cwd || '~', root: { k: 'pane', id }, focus: id };
+    tabs.push(tab);
+    const p = makePane({ id, section, name: tab.name, path: tab.path });
+    p.claudeSession = it.session;
+    renderView(tab);
+    const [alive] = it.pid ? await sb.pidAlive([it.pid]) : [false];
+    if (alive) {
+      p.waitPid = it.pid;
+      await spawnPane(p, null);
+      typeWhenReady(p, `claude --resume ${it.session}`);
+    } else {
+      await spawnPane(p, `claude --resume ${it.session}`);
+    }
+    if (!current[section]) current[section] = tab.id;
+    added++;
+  }
+  showTab(current[active]);
+  persist();
+  if (added) toast(`${added} conversation${added > 1 ? 's' : ''} imported. Each continues here when you close its Terminal window.`);
+}
+
+async function watchHandoffs() {
+  const waiting = [...panes.values()].filter((p) => p.waitPid);
+  if (!waiting.length) return;
+  const alive = await sb.pidAlive(waiting.map((p) => p.waitPid));
+  waiting.forEach((p, i) => {
+    if (alive[i]) return;
+    p.waitPid = null;
+    setTimeout(() => {
+      sb.write(p.id, '\r');
+      const t = tabOf(p.id);
+      toast(`${t ? t.name : 'Conversation'} moved over from Terminal`);
+      persist();
+      renderTabs();
+    }, 1200); // let the old process finish writing its transcript
+  });
 }
 
 function stripTree(n) {
