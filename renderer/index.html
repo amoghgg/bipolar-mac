@@ -2,12 +2,47 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; media-src 'self' mediastream: blob:; font-src 'self'" />
   <title>Switchboard</title>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="theme.css" />
 </head>
-<body data-section="office" class="booting">
+<body data-section="office" class="booting locked">
+  <div id="portal">
+    <div class="pt-aura" aria-hidden="true"><i></i><i></i><i></i></div>
+    <header class="pt-top">
+      <div class="pt-mark"><b>Switchboard</b>a portal to your work</div>
+      <div class="pt-clock"><span id="pt-time"></span><span id="pt-date"></span></div>
+    </header>
+    <main class="pt-center">
+      <h1><em id="pt-greet">Welcome</em>, Amogh.</h1>
+      <div class="pt-aperture">
+        <div class="pt-ticks"></div>
+        <svg class="pt-arc" viewBox="0 0 400 400" aria-hidden="true">
+          <defs><linearGradient id="holoStroke" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#c6b6ff"/><stop offset=".4" stop-color="#93e4f6"/><stop offset=".75" stop-color="#ffbaa5"/><stop offset="1" stop-color="#f6a8d9"/>
+          </linearGradient></defs>
+          <circle class="track" cx="200" cy="200" r="190"/>
+          <circle class="val" cx="200" cy="200" r="190"/>
+        </svg>
+        <div class="pt-lens">
+          <div class="pt-idle"><i></i></div>
+          <video id="pt-video" muted playsinline></video>
+          <div class="pt-scan"></div>
+        </div>
+      </div>
+      <p id="pt-status"></p>
+      <div class="pt-actions">
+        <button id="pt-enroll" class="pt-btn primary" hidden>Learn my face <kbd>↵</kbd></button>
+        <button id="pt-touch" class="pt-btn">Use Touch ID <kbd>⌘↵</kbd></button>
+      </div>
+    </main>
+    <footer class="pt-bottom">
+      <div id="pt-stats"></div>
+      <figure class="pt-quote"><blockquote id="pt-quote"></blockquote><figcaption id="pt-quote-by"></figcaption></figure>
+    </footer>
+  </div>
   <div id="app">
     <aside id="sidebar">
       <div class="titlebar-space drag"></div>
@@ -65,7 +100,7 @@
         <div id="views"></div>
         <div id="empty">
           <div class="orb"><i></i></div>
-          <h1 id="empty-title">Office is quiet</h1>
+          <h1 id="empty-title">A quiet room</h1>
           <p>Click a project in the sidebar to start Claude there.</p>
           <div class="empty-actions">
             <button id="empty-claude" class="primary"><svg viewBox="0 0 20 20"><path d="M10 2.5 11.6 8.4 17.5 10l-5.9 1.6L10 17.5l-1.6-5.9L2.5 10l5.9-1.6z"/></svg>New Claude session</button>
@@ -124,6 +159,7 @@
   <script src="../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
   <script src="../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
   <script src="../node_modules/@xterm/addon-clipboard/lib/addon-clipboard.js"></script>
+  <script src="portal.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, Notification, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, Notification, nativeTheme, systemPreferences, session, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -260,6 +260,7 @@ function buildMenu() {
         { role: 'about' },
         { type: 'separator' },
         { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: send('settings') },
+        { label: 'Lock Switchboard', accelerator: 'CmdOrCtrl+L', click: send('lock') },
         { type: 'separator' },
         { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
         { type: 'separator' },
@@ -455,10 +456,100 @@ ipcMain.on('notify', (_e, { title, body, paneId }) => {
   if (!win?.isFocused()) app.dock?.bounce('informational');
 });
 
+// ---------------------------------------------------------------- face lock (portal)
+// Uses the owner's own face-biometrics API (InsightFace buffalo_l), run locally on a
+// private port only while the portal is locked. Frames never leave this machine.
+const FACE_FILE = path.join(CONFIG_DIR, 'face.json'); // kept apart from config.json (renderer rewrites that)
+const FACE_PORT = 8770;
+const FACE_URL = `http://127.0.0.1:${FACE_PORT}`;
+let faceProc = null;
+const faceCfg = () => {
+  let c = {};
+  try { c = JSON.parse(fs.readFileSync(FACE_FILE, 'utf8')); } catch {}
+  return {
+    apiDir: path.join(HOME, 'liveness-detection', 'backend'),
+    python: path.join(HOME, 'miniforge3', 'bin', 'python3'),
+    threshold: 0.55,
+    ...c,
+  };
+};
+const saveFace = (patch) => fs.writeFileSync(FACE_FILE, JSON.stringify({ ...faceCfg(), ...patch }, null, 2));
+
+async function facePing() {
+  try { const r = await fetch(`${FACE_URL}/face/list`, { signal: AbortSignal.timeout(1500) }); return r.ok; } catch { return false; }
+}
+async function faceUp() {
+  if (await facePing()) return { ok: true };
+  const c = faceCfg();
+  if (!fs.existsSync(c.apiDir)) return { ok: false, error: `Face API not found at ${c.apiDir}` };
+  if (!faceProc) {
+    const log = fs.openSync(path.join(CONFIG_DIR, 'face-api.log'), 'a');
+    faceProc = spawnProc(c.python, ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(FACE_PORT)], {
+      cwd: c.apiDir, stdio: ['ignore', log, log], env: { ...daemonEnv() },
+    });
+    faceProc.on('exit', () => { faceProc = null; });
+  }
+  for (let i = 0; i < 120; i++) {           // buffalo_l takes a few seconds to load
+    if (await facePing()) return { ok: true };
+    if (!faceProc) return { ok: false, error: 'Face API exited; see ~/.config/switchboard/face-api.log' };
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { ok: false, error: 'Face API did not start in time.' };
+}
+function faceDown() { if (faceProc) { faceProc.kill(); faceProc = null; } }
+
+async function facePost(route, body) {
+  const r = await fetch(`${FACE_URL}${route}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    signal: AbortSignal.timeout(8000),
+  });
+  const j = await r.json().catch(() => ({}));
+  return { status: r.status, body: j };
+}
+
+ipcMain.handle('face:state', () => { const c = faceCfg(); return { enrolled: !!c.faceId, threshold: c.threshold }; });
+ipcMain.handle('face:up', () => (process.env.SWITCHBOARD_SNAPSHOT ? { ok: true } : faceUp()));
+ipcMain.handle('face:down', () => faceDown());
+ipcMain.handle('face:enroll', async (_e, image) => {
+  try {
+    const r = await facePost('/face/register', { name: 'switchboard-owner', image, metadata: { app: 'switchboard' } });
+    if (r.status !== 200) return { ok: false, error: r.body.detail || `HTTP ${r.status}` };
+    saveFace({ faceId: r.body.face_id, enrolledAt: new Date().toISOString() });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('face:verify', async (_e, image) => {
+  const c = faceCfg();
+  if (!c.faceId) return { ok: false, error: 'not enrolled' };
+  try {
+    const r = await facePost('/face/verify', { face_id: c.faceId, image });
+    if (r.status === 422) return { ok: true, face: false, similarity: 0 };
+    if (r.status === 404) { saveFace({ faceId: null }); return { ok: false, error: 'enrolment lost' }; }
+    if (r.status !== 200) return { ok: false, error: r.body.detail || `HTTP ${r.status}` };
+    return { ok: true, face: true, similarity: r.body.similarity, match: r.body.similarity >= c.threshold };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('face:reset', () => { saveFace({ faceId: null }); return true; });
+ipcMain.handle('touchid', async () => {
+  try {
+    if (!systemPreferences.canPromptTouchID()) return { ok: false, error: 'Touch ID is not available' };
+    await systemPreferences.promptTouchID('open your Switchboard');
+    return { ok: true };
+  } catch (e) { return { ok: false, error: 'Touch ID was cancelled' }; }
+});
+ipcMain.handle('camera:access', async () => {
+  if (process.env.SWITCHBOARD_SNAPSHOT) return false; // automated test runs never touch the camera
+  try { return await systemPreferences.askForMediaAccess('camera'); } catch { return false; }
+});
+
 // ---------------------------------------------------------------- lifecycle
 app.setName('Switchboard');
 app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark';
+  session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'media'));
+  session.defaultSession.setPermissionCheckHandler((_wc, perm) => perm === 'media');
+  // Re-lock when the Mac locks or sleeps.
+  for (const ev of ['lock-screen', 'suspend']) powerMonitor.on(ev, () => win?.webContents.send('portal:lock'));
   try { installHookScript(); } catch {}
   watchHooks();
   watchImports();
@@ -469,3 +560,4 @@ app.whenReady().then(async () => {
 app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
 app.on('before-quit', () => { app.isQuitting = true; });
 app.on('window-all-closed', () => app.quit()); // shells live on in the daemon
+app.on('will-quit', () => faceDown());

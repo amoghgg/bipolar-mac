@@ -30,13 +30,13 @@ const TINTS = {
 };
 
 const THEME = {
-  background: '#131415', foreground: '#e4e6eb', cursor: '#e4e6eb', cursorAccent: '#131415',
-  selectionBackground: 'rgba(69, 153, 255, 0.32)', selectionInactiveBackground: 'rgba(255,255,255,0.12)',
-  scrollbarSliderBackground: 'rgba(255,255,255,0.12)', scrollbarSliderHoverBackground: 'rgba(255,255,255,0.2)',
-  black: '#242526', red: '#f3425f', green: '#45bd62', yellow: '#f7b928', blue: '#4599ff',
-  magenta: '#b77cff', cyan: '#2abba7', white: '#cfd1d5',
-  brightBlack: '#6b6e73', brightRed: '#ff6b81', brightGreen: '#6bd685', brightYellow: '#ffd25c',
-  brightBlue: '#73b3ff', brightMagenta: '#cfa2ff', brightCyan: '#5fd8c6', brightWhite: '#ffffff',
+  background: '#0b0b0f', foreground: '#e6e2ee', cursor: '#eeeaf4', cursorAccent: '#0b0b0f',
+  selectionBackground: 'rgba(198, 182, 255, 0.28)', selectionInactiveBackground: 'rgba(236,232,255,0.1)',
+  scrollbarSliderBackground: 'rgba(236,232,255,0.1)', scrollbarSliderHoverBackground: 'rgba(236,232,255,0.18)',
+  black: '#1a1a22', red: '#ff8c9b', green: '#8de6b8', yellow: '#f3c46f', blue: '#93b8ff',
+  magenta: '#d4b0ff', cyan: '#93e4f6', white: '#d6d2e0',
+  brightBlack: '#5f5b70', brightRed: '#ffa8b4', brightGreen: '#aef0cd', brightYellow: '#f8d591',
+  brightBlue: '#b3ceff', brightMagenta: '#e3c9ff', brightCyan: '#b5eefa', brightWhite: '#ffffff',
 };
 
 // ------------------------------------------------------------------ state
@@ -1122,6 +1122,7 @@ function menuAction(action, arg) {
     case 'font': setFont(arg); break;
     case 'settings': openSettings(); break;
     case 'quit-all': confirmQuitAll(); break;
+    case 'lock': Portal.lock(); break;
   }
 }
 
@@ -1238,7 +1239,11 @@ $('#close-btn').addEventListener('click', () => menuAction('close-tab'));
 $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 'row'));
 
 (async function boot() {
+  Portal.init({ onOpen: () => { focusedPane()?.term.focus(); const t = currentTab(); if (t) requestAnimationFrame(() => refit(t)); } });
+  Portal.lock();
   cfg = await sb.getConfig();
+  if (!cfg.ui.fontFamily || /SF Mono/.test(cfg.ui.fontFamily)) cfg.ui.fontFamily = "'JetBrains Mono', 'SF Mono', Menlo, monospace";
+  await document.fonts.load(`13px 'JetBrains Mono'`).catch(() => {});
   env = await sb.env();
   if (cfg.ui.sideW) document.documentElement.style.setProperty('--side-w', cfg.ui.sideW + 'px');
   if (cfg.ui.sidebarHidden) document.body.classList.add('no-sidebar');
@@ -1310,6 +1315,12 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   setInterval(scanScreens, 700);
   setInterval(refreshGit, 20000);
   setInterval(() => renderAttention(), 30000);
+  const portalStats = () => {
+    const live = panes.size, claude = [...panes.values()].filter((p) => p.claudeRunning).length;
+    const waiting = attentionList().length;
+    Portal.stats(`${live} sessions alive · ${claude} with claude\n${waiting ? `${waiting} waiting on you` : 'nothing waiting on you'}`);
+  };
+  portalStats(); setInterval(portalStats, 3000);
   if (restored.resumed) toast(`Resumed ${restored.resumed} Claude conversation${restored.resumed > 1 ? 's' : ''} after restart`);
   else if (restored.live) toast(`Reconnected to ${restored.live} running session${restored.live > 1 ? 's' : ''}`);
 })();

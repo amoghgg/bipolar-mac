@@ -30,6 +30,17 @@ contextBridge.exposeInMainWorld('sb', {
   badge: (n) => ipcRenderer.send('badge', n),
   notify: (o) => ipcRenderer.send('notify', o),
   pathForFile: (f) => webUtils.getPathForFile(f),
+  face: {
+    state: () => ipcRenderer.invoke('face:state'),
+    up: () => ipcRenderer.invoke('face:up'),
+    down: () => ipcRenderer.invoke('face:down'),
+    enroll: (img) => ipcRenderer.invoke('face:enroll', img),
+    verify: (img) => ipcRenderer.invoke('face:verify', img),
+    reset: () => ipcRenderer.invoke('face:reset'),
+  },
+  touchId: () => ipcRenderer.invoke('touchid'),
+  cameraAccess: () => ipcRenderer.invoke('camera:access'),
+  onLock: on('portal:lock'),
 
   onData: on('pty:data'),
   onExit: on('pty:exit'),
