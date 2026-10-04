@@ -779,8 +779,8 @@ $('#projects').addEventListener('click', (e) => {
   if (!li) return;
   const proj = cfg.sections[active].projects[+li.dataset.i];
   const act = e.target.closest('[data-act]')?.dataset.act;
-  if (act === 'claude') openTab(active, proj, { claude: true });
-  else if (act === 'shell') openTab(active, proj);
+  if (act === 'claude') openOnce(active, proj, 'claude');
+  else if (act === 'shell') openOnce(active, proj, 'shell');
   else focusOrOpen(proj);
 });
 $('#projects').addEventListener('contextmenu', async (e) => {
@@ -792,8 +792,8 @@ $('#projects').addEventListener('contextmenu', async (e) => {
   const proj = list[i];
   const other = active === 'office' ? 'personal' : 'office';
   const r = await sb.popup([
-    { id: 'claude', label: 'New Claude Session' },
-    { id: 'shell', label: 'New Shell' },
+    { id: 'claude', label: 'Start Another Claude Session' },
+    { id: 'shell', label: 'Open Another Shell' },
     '-',
     { id: 'rename', label: 'Rename…' },
     { id: 'move', label: `Move to ${LABEL[other]}` },
@@ -825,6 +825,19 @@ function renameProject(li, proj) {
   input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
   input.addEventListener('blur', () => done(true));
   input.addEventListener('click', (e) => e.stopPropagation());
+}
+
+// One tab per thing: reuse the project's existing Claude (or shell) tab instead of stacking duplicates.
+function isClaudeTab(t) {
+  return leaves(t.root).some((id) => { const p = panes.get(id); return p && (p.claudeRunning || p.waitPid || p.claudeSession); });
+}
+function openOnce(section, proj, kind) {
+  const match = tabs.find((t) => t.section === section && t.path === proj.path && (kind === 'claude' ? isClaudeTab(t) : !isClaudeTab(t)));
+  if (match) {
+    if (section !== active) setSection(section, { quiet: true });
+    return showTab(match.id);
+  }
+  return openTab(section, proj, { claude: kind === 'claude' });
 }
 
 function focusOrOpen(proj) {
@@ -950,7 +963,7 @@ function paletteSource() {
         group: 'Projects', key: proj.name, title: proj.name, sub: proj.path, section: s,
         icon: `<span class="avatar" style="--av:${tint(s, proj.name)}">${esc(initial(proj.name))}</span>`,
         run: () => { setSection(s, { quiet: true }); focusOrOpen(proj); },
-        alt: () => openTab(s, proj, { claude: true }),
+        alt: () => openOnce(s, proj, 'claude'),
       });
     }
   }
