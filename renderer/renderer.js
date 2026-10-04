@@ -739,7 +739,7 @@ function renderProjects() {
         <button class="icon-btn" data-act="claude" title="New Claude session">${ICON.spark}</button>
         <button class="icon-btn" data-act="shell" title="New shell">${ICON.prompt}</button>
       </span></li>`;
-  }).join('') || `<li class="proj" style="color:var(--text-3)">Add a folder to start.</li>`;
+  }).join('') || `<li class="proj-empty">Add a folder to start.</li>`;
   if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
   for (const s of SECTIONS) {
     const n = tabs.filter((t) => t.section === s).length;
@@ -1187,7 +1187,9 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
       const rec = recs[id] || {};
       const p = makePane({ id, section: st.section, name: rec.name || st.name, path: rec.path || st.path });
       p.claudeSession = rec.claudeSession || null;
-      p._restore = alive.has(id) ? 'attach' : rec.wasClaude && rec.claudeSession ? 'resume' : 'shell';
+      p._restore = alive.has(id) ? 'attach'
+        : rec.prefill && rec.claudeSession ? 'prefill'
+        : rec.wasClaude && rec.claudeSession ? 'resume' : 'shell';
     }
     if (!ids.includes(tab.focus)) tab.focus = ids[0];
     renderView(tab);
@@ -1215,6 +1217,10 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
     else if (p._restore === 'resume') {
       await spawnPane(p, `claude --resume ${p.claudeSession} || claude --session-id ${p.claudeSession}`);
       restored.resumed++;
+    } else if (p._restore === 'prefill') {
+      // Typed but not run: the conversation is still open elsewhere; press Enter once it's closed there.
+      await spawnPane(p, null);
+      typeWhenReady(p, `claude --resume ${p.claudeSession}`);
     } else await spawnPane(p, null);
     delete p._restore;
   }
@@ -1228,6 +1234,17 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   if (restored.resumed) toast(`Resumed ${restored.resumed} Claude conversation${restored.resumed > 1 ? 's' : ''} after restart`);
   else if (restored.live) toast(`Reconnected to ${restored.live} running session${restored.live > 1 ? 's' : ''}`);
 })();
+
+// Type text at the shell prompt once the shell has gone quiet (prompt drawn), without pressing Enter.
+function typeWhenReady(p, text) {
+  const start = Date.now();
+  const tick = () => {
+    const quiet = p.lastOut && Date.now() - p.lastOut > 500;
+    if (quiet || Date.now() - start > 8000) sb.write(p.id, text);
+    else setTimeout(tick, 150);
+  };
+  setTimeout(tick, 300);
+}
 
 function stripTree(n) {
   return n.k === 'pane' ? { k: 'pane', id: n.id } : { k: 'split', dir: n.dir, r: n.r, a: stripTree(n.a), b: stripTree(n.b) };

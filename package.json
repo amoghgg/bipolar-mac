@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "package": "electron-packager . Switchboard --platform=darwin --arch=arm64 --overwrite --out=dist --icon=build/icon.icns --app-bundle-id=com.amoghbajpai.switchboard --no-asar --ignore=^/dist --ignore=^/\\.git && rm -rf /Applications/Switchboard.app && cp -R dist/Switchboard-darwin-arm64/Switchboard.app /Applications/",
+    "package": "electron-packager . Switchboard --platform=darwin --arch=arm64 --overwrite --out=dist --icon=build/icon.icns --app-bundle-id=com.amoghbajpai.switchboard --no-asar --ignore=^/dist --ignore=^/\\.git && rm -rf /Applications/Switchboard.app && cp -R dist/Switchboard-darwin-arm64/Switchboard.app /Applications/ && chmod +x /Applications/Switchboard.app/Contents/Resources/app/node_modules/node-pty/prebuilds/darwin-*/spawn-helper",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper"
   },
   "dependencies": {

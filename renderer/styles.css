@@ -457,3 +457,5 @@ body.ready #stage { animation: stage-in 620ms var(--ease) 60ms both; }
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
   .glyph.working::before { animation: none; }
 }
+
+.proj-empty { padding: 10px 14px; color: var(--text-3); }
