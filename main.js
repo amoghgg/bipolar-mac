@@ -611,6 +611,8 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler((_wc, perm) => perm === 'media');
   // Re-lock when the Mac locks or sleeps.
   for (const ev of ['lock-screen', 'suspend']) powerMonitor.on(ev, () => win?.webContents.send('portal:lock'));
+  // Back at the Mac: let the camera come back, then the portal scans.
+  for (const ev of ['unlock-screen', 'resume']) powerMonitor.on(ev, () => setTimeout(() => win?.webContents.send('portal:wake'), 900));
   try { installHookScript(); } catch {}
   watchHooks();
   watchImports();

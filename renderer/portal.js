@@ -57,14 +57,44 @@ const Portal = (() => {
     return c.toDataURL('image/jpeg', 0.85).split(',')[1];
   }
 
-  async function loop() {
+  // A scan is a short burst (≤15s) with a fresh camera stream. It starts when you come
+  // back — Mac unlock/wake, window focus, mouse or keyboard — never while you're away.
+  let scanToken = 0;
+  let lastWake = 0;
+  const SCAN_MS = 15000;
+  function stopScan() { scanToken++; running = false; stopCamera(); }
+
+  async function scan() {
+    if (el('portal').hidden || el('portal').classList.contains('opening') || running) return;
+    const token = ++scanToken;
+    running = true;
+    lastSim = 0;
+    show('looking', 'Look at your Mac');
+    sb.face.warm(); // wake the model while the camera starts
+    stopCamera();   // never reuse a stream that may have died during sleep
+    const [cam, state, up] = await Promise.all([startCamera(), sb.face.state(), sb.face.up()]);
+    if (token !== scanToken) return;
+    if (!cam) { running = false; return show('fail', 'No camera access. Use Touch ID, or allow the camera in System Settings › Privacy.', 'warn'); }
+    if (!up.ok) { running = false; return show('fail', 'Face service unavailable. Use Touch ID.', 'warn'); }
+    mode = state.enrolled ? 'verify' : 'enroll';
+    if (!state.enrolled) askEnroll();
+    loop(token, Date.now() + SCAN_MS);
+  }
+
+  async function loop(token, deadline) {
     let misses = 0;
-    while (running) {
+    let lastT = -1, stuckSince = Date.now();
+    const v = el('pt-video');
+    while (running && token === scanToken) {
       if (mode === 'enroll') { await wait(150); continue; }
+      if (Date.now() > deadline) { stopScan(); return show('looking', 'Locked. Move the mouse or press a key to look again.'); }
+      // Frozen or dead camera (e.g. after sleep): restart it.
+      if (v.currentTime !== lastT) { lastT = v.currentTime; stuckSince = Date.now(); }
+      else if (Date.now() - stuckSince > 1500) { stopCamera(); await startCamera(); stuckSince = Date.now(); continue; }
       const img = frame();
       if (!img) { await wait(80); continue; }
       const r = await sb.face.verify(img);
-      if (!running) return;
+      if (!running || token !== scanToken) return;
       if (!r.ok) {
         if (r.error === 'enrolment lost' || r.error === 'not enrolled') return askEnroll();
         show('looking', 'Getting ready…');
@@ -80,9 +110,17 @@ const Portal = (() => {
         return open('face');
       }
       show('verifying', 'Verifying face…');
-      if (!r.match && ++misses > 6) { show('fail', 'Not recognised. Try again, or use Touch ID.', 'warn'); misses = 0; await wait(900); }
+      if (++misses > 6) { show('fail', 'Not recognised. Try again, or use Touch ID.', 'warn'); misses = 0; await wait(900); }
       lastSim = r.similarity;
     }
+  }
+
+  // Coming back to the Mac starts a scan (debounced, and not in the first second after locking).
+  function wake() {
+    if (el('portal').hidden || running) return;
+    if (Date.now() - lastWake < 800) return;
+    lastWake = Date.now();
+    scan();
   }
 
   function askEnroll() {
@@ -111,8 +149,7 @@ const Portal = (() => {
   }
 
   async function open(how) {
-    running = false;
-    stopCamera();
+    stopScan();
     show('verified', 'Verified', 'ok');
     await wait(how === 'face' ? 520 : 300);
     el('portal').classList.add('opening');
@@ -123,8 +160,10 @@ const Portal = (() => {
     onOpen(how);
   }
 
-  async function lock() {
-    if (!el('portal').hidden && running) return;
+  let lockedAt = 0;
+  function lock({ scanNow = false } = {}) {
+    stopScan();
+    lockedAt = Date.now();
     document.body.classList.add('locked');
     el('portal').hidden = false;
     el('portal').classList.remove('opening');
@@ -134,17 +173,8 @@ const Portal = (() => {
     el('pt-greet').textContent = greeting();
     tickClock();
     el('pt-enroll').hidden = true;
-    show('looking', 'Look at your Mac');
-    running = true;
-    lastSim = 0;
-    sb.face.warm(); // wake the model while the camera starts
-    const [cam, state, up] = await Promise.all([startCamera(), sb.face.state(), sb.face.up()]);
-    if (!running) return;
-    if (!cam) { running = false; return show('fail', 'No camera access. Use Touch ID, or allow the camera in System Settings › Privacy.', 'warn'); }
-    if (!up.ok) { running = false; return show('fail', 'Face service unavailable. Use Touch ID.', 'warn'); }
-    mode = state.enrolled ? 'verify' : 'enroll';
-    if (!state.enrolled) askEnroll();
-    loop();
+    show('looking', 'Locked. Move the mouse or press a key to look.');
+    if (scanNow) scan();
   }
 
   function stats(text) { el('pt-stats').textContent = text; }
@@ -160,7 +190,13 @@ const Portal = (() => {
       else if (e.key === 'Enter' && mode === 'enroll' && !el('pt-enroll').hidden) { e.preventDefault(); enroll(); }
     }, true);
     sb.onLock(() => lock());
+    sb.onWake?.(() => wake());
+    const activity = () => { if (Date.now() - lockedAt > 1200) wake(); };
+    window.addEventListener('focus', activity);
+    document.addEventListener('mousemove', activity, { passive: true });
+    document.addEventListener('mousedown', activity, true);
+    document.addEventListener('keydown', (e) => { if (!(e.key === 'Enter' && e.metaKey)) activity(); }, true);
   }
 
-  return { init, lock, stats, get locked() { return !el('portal').hidden; } };
+  return { init, lock, scan, stats, get locked() { return !el('portal').hidden; } };
 })();

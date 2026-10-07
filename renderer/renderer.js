@@ -1438,7 +1438,7 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
 
 (async function boot() {
   Portal.init({ onOpen: () => { focusedPane()?.term.focus(); const t = currentTab(); if (t) requestAnimationFrame(() => refit(t)); } });
-  Portal.lock();
+  Portal.lock({ scanNow: true }); // just opened Bipolar: you're here, look straight away
   cfg = await sb.getConfig();
   cfg.ui.font = cfg.ui.font || 'sfmono'; // the Terminal.app font by default
   await Promise.all(["13px 'SF Mono Terminal'", "bold 13px 'SF Mono Terminal'", "13px 'JetBrains Mono'", "13px 'Geist Mono'"].map((f) => document.fonts.load(f).catch(() => {})));

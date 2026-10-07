@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('sb', {
   touchId: () => ipcRenderer.invoke('touchid'),
   cameraAccess: () => ipcRenderer.invoke('camera:access'),
   onLock: on('portal:lock'),
+  onWake: on('portal:wake'),
 
   onData: on('pty:data'),
   onExit: on('pty:exit'),
