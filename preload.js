@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('sb', {
   badge: (n) => ipcRenderer.send('badge', n),
   notify: (o) => ipcRenderer.send('notify', o),
   pathForFile: (f) => webUtils.getPathForFile(f),
+  clipboardImage: () => ipcRenderer.invoke('clipboard:image'),
+  clipboardHasImage: () => ipcRenderer.invoke('clipboard:hasImage'),
   face: {
     state: () => ipcRenderer.invoke('face:state'),
     up: () => ipcRenderer.invoke('face:up'),

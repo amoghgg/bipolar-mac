@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, Notification, nativeTheme, systemPreferences, session, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, Notification, nativeTheme, systemPreferences, session, powerMonitor, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -460,6 +460,18 @@ ipcMain.handle('git:diff', async (_e, p) => {
   const patch = (await run(['diff', 'HEAD', '--no-color', '--no-ext-diff'], dir)) || '';
   return { patch: patch.length > 600000 ? patch.slice(0, 600000) + '\n… (diff truncated)' : patch };
 });
+
+// Image on the clipboard (screenshot, copied picture): save it so a shell can be given its path.
+ipcMain.handle('clipboard:image', () => {
+  const img = clipboard.readImage();
+  if (img.isEmpty()) return null;
+  const dir = path.join(CONFIG_DIR, 'pastes');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `paste-${new Date().toISOString().replace(/[:.]/g, '-')}.png`);
+  fs.writeFileSync(file, img.toPNG());
+  return file;
+});
+ipcMain.handle('clipboard:hasImage', () => !clipboard.readImage().isEmpty());
 
 ipcMain.handle('dialog:folder', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], defaultPath: HOME });

@@ -1387,6 +1387,32 @@ document.addEventListener('drop', (e) => {
   p.term.focus();
 });
 
+// ------------------------------------------------------------------ paste images
+// xterm only pastes text, so an image-only clipboard used to vanish. Do what Terminal does:
+// into Claude, send Ctrl+V so Claude reads the clipboard image itself ([Image #1]);
+// into a plain shell, save the image and paste its path. Files copied in Finder paste as paths.
+document.addEventListener('paste', async (e) => {
+  const p = focusedPane();
+  if (!p || !p.el.contains(document.activeElement)) return;
+  const dt = e.clipboardData;
+  const text = dt.getData('text/plain');
+  const fileUrls = (dt.getData('text/uri-list') || '').split(/\r?\n/).filter((u) => u.startsWith('file://'));
+  const files = [...dt.files];
+  const paths = files.map((f) => { try { return sb.pathForFile(f); } catch { return ''; } }).filter(Boolean)
+    .concat(fileUrls.map((u) => decodeURIComponent(new URL(u).pathname)));
+  if (paths.length) {
+    e.preventDefault(); e.stopImmediatePropagation();
+    p.term.paste([...new Set(paths)].map(shq).join(' ') + ' ');
+    return;
+  }
+  const isImage = files.some((f) => f.type.startsWith('image/')) || [...dt.types].some((t) => t.startsWith('image/'));
+  if (!isImage || text) return; // ordinary text paste: let the terminal handle it
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (p.claudeRunning) { sb.write(p.id, '\x16'); return; }
+  const file = await sb.clipboardImage();
+  if (file) p.term.paste(shq(file) + ' ');
+}, true);
+
 // ------------------------------------------------------------------ boot
 sb.onData((id, d) => {
   const p = panes.get(id);
