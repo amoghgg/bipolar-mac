@@ -477,6 +477,25 @@ ipcMain.handle('dialog:folder', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], defaultPath: HOME });
   return r.canceled || !r.filePaths[0] ? null : tildify(r.filePaths[0]);
 });
+// New project: create the folder (and optionally a git repo) so the user only types a name.
+ipcMain.handle('project:create', async (_e, { parent, name, git }) => {
+  const clean = String(name || '').trim();
+  if (!clean) return { ok: false, error: 'Give it a name.' };
+  if (/[\/:]/.test(clean) || clean.startsWith('.')) return { ok: false, error: 'Names can’t contain / or : or start with a dot.' };
+  const base = expand(parent || '~/Projects');
+  const dir = path.join(base, clean);
+  try {
+    fs.mkdirSync(base, { recursive: true });
+    if (fs.existsSync(dir)) return { ok: false, exists: true, path: tildify(dir), error: 'A folder with that name already exists there.' };
+    fs.mkdirSync(dir);
+    if (git) await new Promise((r) => execFile('git', ['init', '-q'], { cwd: dir }, () => r()));
+    return { ok: true, path: tildify(dir) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('dialog:parent', async (_e, current) => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], defaultPath: expand(current || '~/Projects'), buttonLabel: 'Create projects here' });
+  return r.canceled || !r.filePaths[0] ? null : tildify(r.filePaths[0]);
+});
 ipcMain.handle('menu:popup', (_e, items) => new Promise((resolve) => {
   let done = false;
   const finish = (v) => { if (!done) { done = true; resolve(v); } };

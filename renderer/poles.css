@@ -220,3 +220,18 @@ body::after { opacity: .085; z-index: 95; }
   background: transparent; color: var(--text); font: italic 400 32px/1 var(--font-display); letter-spacing: -.01em;
 }
 .task .name-edit { font: italic 400 19px/1.1 var(--font-display); height: 26px; }
+
+/* new project sheet */
+.np-name {
+  width: 100%; height: 48px; padding: 0 14px; border: 0; border-radius: 12px; outline: 0;
+  background: rgba(236,232,255,.05); box-shadow: inset 0 0 0 1px var(--line); color: var(--text);
+  font: italic 400 24px/1 var(--font-display);
+}
+.np-name:focus { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--a1) 60%, transparent); }
+.np-where { margin: 10px 2px 0; font: 400 11.5px/1.5 var(--font-meta); color: var(--text-3); }
+.np-where code { color: var(--text-2); font: inherit; }
+.np-where .ghost-link { margin-left: 6px; font-family: var(--font-meta); font-size: 11.5px; text-decoration: underline; text-underline-offset: 3px; }
+.np-check { display: flex; align-items: center; gap: 8px; margin: 14px 2px 0; font: 400 12.5px var(--font-ui); color: var(--text-2); }
+.np-check input { accent-color: var(--a1); }
+.np-error { margin: 12px 2px 0; font: 400 12.5px/1.5 var(--font-ui); color: var(--waiting); }
+.np-error .ghost-link { color: var(--text); text-decoration: underline; margin-left: 6px; }

@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('sb', {
   changes: (paths) => ipcRenderer.invoke('git:changes', paths),
   diff: (p) => ipcRenderer.invoke('git:diff', p),
   pickFolder: () => ipcRenderer.invoke('dialog:folder'),
+  pickParent: (cur) => ipcRenderer.invoke('dialog:parent', cur),
+  createProject: (o) => ipcRenderer.invoke('project:create', o),
   popup: (items) => ipcRenderer.invoke('menu:popup', items),
   reveal: (p) => ipcRenderer.send('reveal', p),
   openEditor: (p) => ipcRenderer.send('open-editor', p),

@@ -1011,7 +1011,10 @@ async function startComposed() {
 }
 $('#c-start').addEventListener('click', startComposed);
 $('#c-cancel').addEventListener('click', () => closeOverlay($('#composer')));
-$('#c-add').addEventListener('click', async () => { await addProject(); renderComposeProjects(); });
+$('#c-add').addEventListener('click', () => {
+  closeOverlay($('#composer'));
+  setTimeout(() => addProject({ onDone: (proj) => openComposer(proj) }), 140);
+});
 $('#composer').addEventListener('mousedown', (e) => { if (e.target.id === 'composer') closeOverlay($('#composer')); });
 $('#c-brief').addEventListener('keydown', (e) => {
   e.stopPropagation();
@@ -1071,16 +1074,67 @@ function focusOrOpen(proj) {
   showTab(mine[(i + 1) % mine.length].id);
 }
 
-async function addProject() {
+// Add project: ask only for a name; Bipolar makes the folder (and a git repo) and opens Claude in it.
+let npOnDone = null;
+function npParent() { return cfg.ui.projectsDir || '~/Projects'; }
+function npRender() {
+  const name = $('#np-name').value.trim();
+  $('#np-path').textContent = `${npParent().replace(/\/$/, '')}/${name || '…'}`;
+  $('#np-error').hidden = true;
+}
+function addProject({ onDone } = {}) {
+  npOnDone = onDone || null;
+  $('#np-sec').textContent = LABEL[active];
+  $('#np-name').value = '';
+  npRender();
+  const el = $('#newproj');
+  el.hidden = false;
+  el.classList.remove('closing');
+  setTimeout(() => $('#np-name').focus(), 30);
+}
+function registerProject(name, path) {
+  const list = cfg.sections[active].projects;
+  let proj = list.find((x) => x.path === path);
+  if (!proj) { proj = { name, path }; list.push(proj); }
+  persist(); renderProjects(); refreshGit();
+  return proj;
+}
+async function npCreate() {
+  const name = $('#np-name').value.trim();
+  const r = await sb.createProject({ parent: npParent(), name, git: $('#np-git').checked });
+  if (!r.ok) {
+    $('#np-error').innerHTML = esc(r.error) + (r.exists ? ' <button class="ghost-link" id="np-use">Use that folder</button>' : '');
+    $('#np-error').hidden = false;
+    $('#np-use')?.addEventListener('click', () => npFinish(registerProject(name, r.path), false));
+    return;
+  }
+  npFinish(registerProject(name, r.path), true);
+}
+function npFinish(proj, created) {
+  closeOverlay($('#newproj'));
+  toast(created ? `Created ${proj.path}` : `${proj.name} added to ${LABEL[active]}`);
+  if (npOnDone) return npOnDone(proj);
+  openOnce(active, proj, 'claude'); // straight into work
+}
+$('#np-name').addEventListener('input', npRender);
+$('#np-name').addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter') { e.preventDefault(); npCreate(); }
+  if (e.key === 'Escape') closeOverlay($('#newproj'));
+});
+$('#np-create').addEventListener('click', npCreate);
+$('#np-cancel').addEventListener('click', () => closeOverlay($('#newproj')));
+$('#newproj').addEventListener('mousedown', (e) => { if (e.target.id === 'newproj') closeOverlay($('#newproj')); });
+$('#np-change').addEventListener('click', async () => {
+  const dir = await sb.pickParent(npParent());
+  if (dir) { cfg.ui.projectsDir = dir; persist(); npRender(); }
+  $('#np-name').focus();
+});
+$('#np-existing').addEventListener('click', async () => {
   const path = await sb.pickFolder();
   if (!path) return;
-  const name = path.split('/').filter(Boolean).pop() || path;
-  cfg.sections[active].projects.push({ name, path });
-  renderProjects();
-  refreshGit();
-  persist();
-  toast(`${name} added to ${LABEL[active]}`);
-}
+  npFinish(registerProject(path.split('/').filter(Boolean).pop() || path, path), false);
+});
 
 function attentionList() {
   return [...panes.values()]
@@ -1189,7 +1243,7 @@ function paletteSource() {
   cmd('Split right', ICON.split, () => splitPane('row'), '⌘D');
   cmd('Split down', ICON.splitd, () => splitPane('col'), '⇧⌘D');
   cmd(`Switch to ${LABEL[active === 'office' ? 'personal' : 'office']}`, ICON.swap, () => setSection(active === 'office' ? 'personal' : 'office'), active === 'office' ? '⌘2' : '⌘1');
-  cmd('Add a project folder', ICON.folder, addProject);
+  cmd('New project', ICON.folder, () => addProject());
   cmd('Toggle sidebar', ICON.side, () => menuAction('toggle-sidebar'), '⌘B');
   cmd('Settings', ICON.gear, openSettings, '⌘,');
   cmd('Quit and end all sessions', ICON.power, confirmQuitAll, '⌥⌘Q');
@@ -1481,7 +1535,7 @@ $('#empty-claude').addEventListener('click', () => openComposer());
 $('#new-task').addEventListener('click', () => openComposer());
 $('#archive-btn').addEventListener('click', () => archiveTask(currentTab()));
 $('#changes-btn').addEventListener('click', openDrawer);
-$('#add').addEventListener('click', addProject);
+$('#add').addEventListener('click', () => addProject());
 $('#home-shell').addEventListener('click', () => openTab(active, { name: 'Home', path: '~' }));
 $('#settings-btn').addEventListener('click', openSettings);
 $('#new-tab').addEventListener('click', () => menuAction('new-tab'));
