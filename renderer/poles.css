@@ -213,3 +213,10 @@ body::after { opacity: .085; z-index: 95; }
 #card.light #sb-claude.waiting { color: #9a6514; }
 #card.light #sb-claude.done { color: #2f8a5b; }
 #card.light #sb-sessions .live { background: #2f8a5b; }
+
+/* renaming in place */
+#crumb .name-edit {
+  min-width: 18ch; padding: 0 2px 2px; border: 0; border-bottom: 1px solid var(--a1); border-radius: 0; outline: 0;
+  background: transparent; color: var(--text); font: italic 400 32px/1 var(--font-display); letter-spacing: -.01em;
+}
+.task .name-edit { font: italic 400 19px/1.1 var(--font-display); height: 26px; }

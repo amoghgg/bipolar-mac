@@ -65,7 +65,7 @@ const persist = debounce(() => {
   cfg.session = {
     active,
     current: { ...current },
-    tabs: tabs.map((t) => ({ id: t.id, section: t.section, name: t.name, path: t.path, focus: t.focus, createdAt: t.createdAt, theme: t.theme, root: ser(t.root) })),
+    tabs: tabs.map((t) => ({ id: t.id, section: t.section, name: t.name, path: t.path, focus: t.focus, createdAt: t.createdAt, theme: t.theme, named: t.named || undefined, root: ser(t.root) })),
   };
   sb.saveConfig(cfg);
 }, 300);
@@ -441,7 +441,7 @@ function focusPane(id) {
   const p = panes.get(id);
   $$('.pane', $(`.view[data-tab="${tab.id}"]`)).forEach((el) => el.classList.toggle('focused', el.dataset.pane === id));
   if (p) {
-    p.term.focus();
+    if (!editingName) p.term.focus();
     if (p.unread) { p.unread = null; renderAttention(); }
   }
   renderAttention();
@@ -577,6 +577,7 @@ function renderTabs() {
 }
 
 function renderCrumb() {
+  if (editingName && document.activeElement?.closest?.('#crumb')) return;
   const t = currentTab();
   const th = THEMES.get(t?.theme);
   $('#card').style.setProperty('--term-bg', th.colors.background);
@@ -598,21 +599,43 @@ function renderCrumb() {
   $('#tabbar .tab-actions').style.visibility = t ? 'visible' : 'hidden';
 }
 
-function editInline(el, value, save) {
+// While a name is being edited, nothing may redraw the row or pull focus to a terminal.
+let editingName = false;
+function editInline(el, value, save, { onDone } = {}) {
+  if (!el || editingName) return;
+  editingName = true;
   const input = document.createElement('input');
+  input.className = 'name-edit';
   input.value = value;
+  input.spellcheck = false;
   el.replaceWith(input);
-  input.focus(); input.select();
+  const started = Date.now();
+  const grab = () => { input.focus(); input.select(); };
+  grab();
+  requestAnimationFrame(grab); // win against the terminal focusing itself on the same click
   let done = false;
   const finish = (ok) => {
-    if (done) return; done = true;
+    if (done) return;
+    done = true;
+    editingName = false;
+    if (input.isConnected) input.replaceWith(el); // header title is restored in place; sidebar rows are redrawn
     if (ok && input.value.trim()) save(input.value.trim());
     $('#tree').dataset.html = '';
     renderSidebar();
+    renderCrumb();
+    onDone?.();
+    focusedPane()?.term.focus();
   };
-  input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); });
-  input.addEventListener('blur', () => finish(true));
-  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => {
+    if (Date.now() - started < 500) return setTimeout(grab, 0); // stolen focus right after opening: take it back
+    finish(true);
+  });
+  for (const ev of ['click', 'mousedown', 'dblclick']) input.addEventListener(ev, (e) => e.stopPropagation());
 }
 
 async function tabMenu(t) {
@@ -741,6 +764,7 @@ function projectOf(t) {
   return t.path === '~' ? 'home' : t.path.split('/').filter(Boolean).pop();
 }
 function sessLabel(t) {
+  if (t.named && t.name) return t.name; // a name you chose always wins
   const p = panes.get(t.focus);
   const proj = projectOf(t);
   if (t.name && norm(t.name) !== norm(proj) && t.name !== 'Home') return t.name;
@@ -781,7 +805,7 @@ function taskRow(t, { showSection = false } = {}) {
 }
 
 function renderSidebar() {
-  if (!cfg) return;
+  if (!cfg || editingName) return;
   const ul = $('#tree');
   const all = tabs;
   const mine = all.filter((t) => t.section === active);
@@ -834,17 +858,19 @@ $('#tree').addEventListener('dblclick', (e) => {
   const row = e.target.closest('[data-tab]');
   if (!row) return;
   const t = tabs.find((x) => x.id === row.dataset.tab);
-  editInline($('.t-name', row), sessLabel(t), (v) => { t.name = v; persist(); });
+  if (t) renameTab(t);
 });
+$('#crumb').addEventListener('dblclick', () => { const t = currentTab(); if (t) renameTab(t, { inHeader: true }); });
 $('#tree').addEventListener('contextmenu', (e) => {
   const row = e.target.closest('[data-tab]');
   if (!row) return;
   e.preventDefault();
   tabMenu(tabs.find((t) => t.id === row.dataset.tab));
 });
-function renameTab(t) {
-  const label = $(`#tree [data-tab="${t.id}"] .t-name`);
-  if (label) editInline(label, sessLabel(t), (v) => { t.name = v; persist(); });
+function renameTab(t, { inHeader = false } = {}) {
+  const save = (v) => { t.name = v; t.named = true; persist(); toast(`Renamed to “${v}”`); };
+  const label = inHeader ? $('#crumb-title') : $(`#tree [data-tab="${t.id}"] .t-name`);
+  if (label) editInline(label, sessLabel(t), save);
 }
 
 // ------------------------------------------------------------------ themes & fonts
@@ -1484,7 +1510,7 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   const restored = { live: 0, resumed: 0 };
   for (const st of saved.tabs || []) {
     const ids = leaves(st.root);
-    const tab = { id: st.id, section: st.section, name: st.name, path: st.path, root: stripTree(st.root), focus: st.focus, createdAt: st.createdAt || Date.now(), theme: st.theme || 'night' };
+    const tab = { id: st.id, section: st.section, name: st.name, path: st.path, root: stripTree(st.root), focus: st.focus, createdAt: st.createdAt || Date.now(), theme: st.theme || 'night' , named: st.named };
     const recs = collect(st.root);
     tabs.push(tab);
     for (const id of ids) {
