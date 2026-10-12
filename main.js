@@ -276,7 +276,8 @@ function createWindow() {
   if (process.env.SWITCHBOARD_UA) win.webContents.setUserAgent(process.env.SWITCHBOARD_UA); // dev aid: preview the Windows UI
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   // Automated test runs render off-screen and never take focus.
-  if (process.env.SWITCHBOARD_SNAPSHOT) { win.setPosition(-6000, 0); win.once('ready-to-show', () => win.showInactive()); }
+  // (SWITCHBOARD_ONSCREEN: unattended CI machines, where Windows won't paint an off-screen window.)
+  if (process.env.SWITCHBOARD_SNAPSHOT) { if (!process.env.SWITCHBOARD_ONSCREEN) win.setPosition(-6000, 0); win.once('ready-to-show', () => win.showInactive()); }
   else win.once('ready-to-show', () => win.show());
   win.on('focus', () => { win.webContents.send('window:focus', true); if (IS_WIN) win.flashFrame(false); });
   win.on('blur', () => win.webContents.send('window:focus', false));

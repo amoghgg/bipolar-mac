@@ -22,6 +22,7 @@ jobs:
         run: node test/e2e-win.js
         env:
           BIPOLAR_E2E_DIR: ${{ github.workspace }}/e2e-out
+          SWITCHBOARD_ONSCREEN: '1'
       - if: always()
         uses: actions/upload-artifact@v5
         with:

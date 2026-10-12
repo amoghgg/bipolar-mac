@@ -82,10 +82,11 @@ const r1 = await launch('run1', [
         await T.until(() => T.pane().hook?.event === 'Stop', 15000);
         return { hook: T.pane().hook?.event || null, session: T.pane().claudeSession };`),
   step(`const r = await sb.registerHooks(); const e = await sb.env(); return { r, hooks: e.hooks };`),
-  step(`T.run('claude'); const ok = await T.until(() => T.pane().claudeRunning, 25000);
+  // Claude runs for 12s and is then stopped (its first-run setup screen may ignore Ctrl+C).
+  step(`T.run('$c = Start-Process claude -NoNewWindow -PassThru; Start-Sleep 12; Stop-Process -Id $c.Id -Force; Write-Output CLAUDE-STOPPED');
+        const ok = await T.until(() => T.pane().claudeRunning, 12000);
         const out = { detected: ok, proc: T.pane().proc, screen: T.screen(8) };
-        sb.write(T.pane().id, '\\x03'); await T.wait(600); sb.write(T.pane().id, '\\x03'); await T.wait(600); sb.write(T.pane().id, '\\x03');
-        await T.until(() => !T.pane().claudeRunning, 20000);
+        await T.until(() => !T.pane().claudeRunning && /^CLAUDE-STOPPED/m.test(T.screen()), 25000);
         out.exitedBack = !T.pane().claudeRunning;
         return out;`),
   step(`const r = await sb.createProject({ parent: ${JSON.stringify(cfgDir.replace(/\\/g, '/'))}, name: 'my project', git: true });
@@ -94,6 +95,10 @@ const r1 = await launch('run1', [
   step(`T.run('Write-Output BIPOLAR-MARK-4242'); await T.until(() => /^BIPOLAR-MARK-4242/m.test(T.screen()));
         persist(); await T.wait(800);
         return { id: T.pane().id, marked: /^BIPOLAR-MARK-4242/m.test(T.screen()) };`, 1500),
+  // The first-launch offer to turn on precise status, answered with a real click.
+  step(`const el = document.getElementById('confirm'); const shown = !el.hidden; const title = document.getElementById('confirm-title').textContent;
+        el.querySelector('[data-yes]')?.click(); await T.wait(1500);
+        return { shown, title, closed: el.hidden, hooks: (await sb.env()).hooks, offered: cfg.ui.hooksOffered };`),
 ]);
 
 check('Windows mode detected', r1[0]?.win === true, r1[0]);
@@ -111,6 +116,8 @@ check('Claude exit detected', r1[7]?.exitedBack === true, r1[7]);
 check('add project creates folder', r1[8]?.r?.ok && fs.existsSync(path.join(cfgDir, 'my project', '.git')), r1[8]);
 check('add project rejects bad names', r1[8]?.bad?.ok === false, r1[8]);
 check('marker written before quit', r1[9]?.marked, r1[9]);
+check('first launch offers precise status', r1[10]?.shown && /Claude is doing/.test(r1[10]?.title || ''), r1[10]);
+check('clicking "Turn it on" works and is remembered', r1[10]?.closed && r1[10]?.hooks && r1[10]?.offered, r1[10]);
 
 // Claude's settings got valid hooks in the documented exec form.
 try {
