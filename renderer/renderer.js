@@ -360,6 +360,15 @@ function scanScreens() {
   }
 }
 
+// A Claude that was killed or crashed can leave focus/mouse reporting on, and the shell then
+// receives stray "[I"/"[O" on every window focus change. Switch those modes off once it's gone
+// (in this window and in the daemon's mirror, so a reopened window doesn't bring them back).
+const RESET_MODES = '\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?25h';
+function resetModes(p) {
+  p.term.write(RESET_MODES);
+  sb.mirror(p.id, RESET_MODES);
+}
+
 function onProcs(procs) {
   if (window.__freezeStatus) return;
   for (const [id, proc] of Object.entries(procs)) {
@@ -370,7 +379,7 @@ function onProcs(procs) {
     if (running !== p.claudeRunning) {
       p.claudeRunning = running;
       if (running) p.claudeSince = Date.now();
-      if (!running) { p.title = ''; setState(p, 'shell'); }
+      if (!running) { p.title = ''; setState(p, 'shell'); resetModes(p); }
       else if (p.state === 'shell') setState(p, 'idle');
       persist();
     }

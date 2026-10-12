@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('sb', {
   snapshot: (id) => ipcRenderer.invoke('pty:snapshot', id),
   cwd: (id) => ipcRenderer.invoke('pty:cwd', id),
   write: (id, d) => ipcRenderer.send('pty:write', id, d),
+  mirror: (id, d) => ipcRenderer.send('pty:mirror', id, d),
   resize: (id, c, r) => ipcRenderer.send('pty:resize', id, c, r),
   kill: (id) => ipcRenderer.send('pty:kill', id),
   quitAll: () => ipcRenderer.invoke('quit-all'),

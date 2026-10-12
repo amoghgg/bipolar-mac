@@ -90,6 +90,9 @@ function handle(sock, msg) {
     case 'write':
       pane?.p.write(msg.d);
       break;
+    case 'mirror': // terminal-state fixes from the app, applied to the screen kept for reattach
+      pane?.head.write(msg.d);
+      break;
     case 'resize':
       if (pane && msg.cols > 1 && msg.rows > 1) {
         try { pane.p.resize(msg.cols, msg.rows); pane.head.resize(msg.cols, msg.rows); } catch {}

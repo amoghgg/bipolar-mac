@@ -88,6 +88,7 @@ const r1 = await launch('run1', [
         const out = { detected: ok, proc: T.pane().proc, screen: T.screen(8) };
         await T.until(() => !T.pane().claudeRunning && /^CLAUDE-STOPPED/m.test(T.screen()), 25000);
         out.exitedBack = !T.pane().claudeRunning;
+        await T.wait(1500); out.focusModeOff = !T.pane().term.modes.sendFocusMode;
         return out;`),
   step(`const r = await sb.createProject({ parent: ${JSON.stringify(cfgDir.replace(/\\/g, '/'))}, name: 'my project', git: true });
         const bad = await sb.createProject({ parent: ${JSON.stringify(cfgDir.replace(/\\/g, '/'))}, name: 'a:b' });
@@ -113,6 +114,7 @@ check('Claude hook script reports to the app', r1[5]?.hook === 'Stop' && r1[5]?.
 check('"Turn on" registers hooks', r1[6]?.r?.ok && r1[6]?.hooks, r1[6]);
 check('Claude detected when running', r1[7]?.detected === true, r1[7]);
 check('Claude exit detected', r1[7]?.exitedBack === true, r1[7]);
+check('modes Claude left on are reset after it dies', r1[7]?.focusModeOff === true, r1[7]);
 check('add project creates folder', r1[8]?.r?.ok && fs.existsSync(path.join(cfgDir, 'my project', '.git')), r1[8]);
 check('add project rejects bad names', r1[8]?.bad?.ok === false, r1[8]);
 check('marker written before quit', r1[9]?.marked, r1[9]);

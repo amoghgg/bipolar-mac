@@ -489,6 +489,7 @@ ipcMain.handle('pty:snapshot', (_e, id) => request({ t: 'snapshot', id }));
 ipcMain.handle('pty:cwd', async (_e, id) => tildify((await request({ t: 'cwd', id })).cwd));
 ipcMain.on('pty:procs-now', () => rawSend({ t: 'procs-now' }));
 ipcMain.on('pty:write', (_e, id, d) => rawSend({ t: 'write', id, d }));
+ipcMain.on('pty:mirror', (_e, id, d) => rawSend({ t: 'mirror', id, d }));
 ipcMain.on('pty:resize', (_e, id, cols, rows) => rawSend({ t: 'resize', id, cols, rows }));
 ipcMain.on('pty:kill', (_e, id) => {
   rawSend({ t: 'kill', id });
