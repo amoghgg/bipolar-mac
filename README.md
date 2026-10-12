@@ -1,6 +1,6 @@
-# Switchboard
+# Bipolar for macOS
 
-A personal terminal workstation for macOS with separate **Office** and **Personal** sections.
+A personal, face-locked terminal workstation for macOS (formerly Switchboard) with separate **Office** and **Personal** sections.
 
 - Projects per section; click to open a shell, ✳ to start Claude in it.
 - Sessions live in a background service (`ptyd.js`): quitting the app (⌘Q) keeps every shell and
@@ -29,3 +29,5 @@ done states, register the helper with Claude Code by adding this to `~/.claude/s
 ```
 
 The helper exits immediately outside Switchboard, so other terminals are unaffected.
+
+The Windows version (no lock, PowerShell, tested on real Windows in CI) is `amoghgg/bipolar-win`.
