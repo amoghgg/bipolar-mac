@@ -235,3 +235,9 @@ body::after { opacity: .085; z-index: 95; }
 .np-check input { accent-color: var(--a1); }
 .np-error { margin: 12px 2px 0; font: 400 12.5px/1.5 var(--font-ui); color: var(--waiting); }
 .np-error .ghost-link { color: var(--text); text-decoration: underline; margin-left: 6px; }
+
+/* ------------------------------------------------------------------ windows */
+/* Windows draws its minimise/maximise/close buttons top-right over the page; no traffic lights on the left. */
+body.win #tabbar { padding-right: 150px; }
+body.win.no-sidebar #tabbar { padding-left: 14px; }
+body.win #tabbar .tab-actions { -webkit-app-region: no-drag; }

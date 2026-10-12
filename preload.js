@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('sb', {
   getConfig: () => ipcRenderer.invoke('config:get'),
   saveConfig: (cfg) => ipcRenderer.send('config:save', cfg),
   env: () => ipcRenderer.invoke('env'),
+  registerHooks: () => ipcRenderer.invoke('hooks:register'),
   hello: () => ipcRenderer.invoke('daemon:hello'),
   uuid: () => ipcRenderer.invoke('uuid'),
 

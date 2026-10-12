@@ -7,15 +7,25 @@ const crypto = require('crypto');
 const { spawn: spawnProc, execFile } = require('child_process');
 
 const HOME = os.homedir();
+const IS_WIN = process.platform === 'win32';
 const CONFIG_DIR = process.env.SWITCHBOARD_CONFIG_DIR || path.join(HOME, '.config', 'switchboard');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const STATE_DIR = path.join(CONFIG_DIR, 'state'); // Claude hook events land here, one file per pane
-const SOCK = path.join(CONFIG_DIR, 'ptyd.sock');
-const HOOK_BIN = path.join(HOME, '.config', 'switchboard', 'bin', 'sb-hook');
+// Windows has no unix sockets in the usual sense: the daemon listens on a per-user named pipe.
+const SOCK = IS_WIN
+  ? `\\\\.\\pipe\\bipolar-ptyd-${(os.userInfo().username || 'user').replace(/[^\w.-]/g, '_')}${process.env.SWITCHBOARD_CONFIG_DIR ? '-' + crypto.createHash('sha1').update(CONFIG_DIR).digest('hex').slice(0, 8) : ''}`
+  : path.join(CONFIG_DIR, 'ptyd.sock');
+const HOOK_BIN = path.join(HOME, '.config', 'switchboard', 'bin', IS_WIN ? 'sb-hook.ps1' : 'sb-hook');
 const DAEMON_VERSION = 4;
 
 const expand = (p) => (p && p.startsWith('~') ? path.join(HOME, p.slice(1)) : p);
-const tildify = (p) => (p && p.startsWith(HOME) ? '~' + p.slice(HOME.length) : p);
+// Paths are shown and stored with forward slashes everywhere; Node on Windows accepts them.
+const slash = (p) => (IS_WIN && p ? p.replace(/\\/g, '/') : p);
+const tildify = (p) => {
+  if (!p) return p;
+  const s = slash(p), h = slash(HOME);
+  return (IS_WIN ? s.toLowerCase().startsWith(h.toLowerCase()) : s.startsWith(h)) ? '~' + s.slice(h.length) : s;
+};
 
 // ---------------------------------------------------------------- config
 const DEFAULT_PROJECTS = {
@@ -61,7 +71,7 @@ function loadConfig() {
     }
     saveConfig(cfg);
   }
-  cfg.ui = { fontSize: 13, fontFamily: "'SF Mono', Menlo, monospace", optionIsMeta: true, notify: true, ...cfg.ui };
+  cfg.ui = { fontSize: 13, fontFamily: "'SF Mono', Menlo, monospace", optionIsMeta: true, notify: true, ...(IS_WIN ? { font: 'cascadia' } : {}), ...cfg.ui };
   return cfg;
 }
 function saveConfig(cfg) {
@@ -82,16 +92,55 @@ f="$SWITCHBOARD_STATE_DIR/$SWITCHBOARD_PANE"
 cat > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f.json" 2>/dev/null
 exit 0
 `;
+// Windows: the same job in PowerShell (always installed). Run by Claude Code directly
+// (exec form, async), so it works whether or not Git Bash is installed and never slows Claude.
+const HOOK_PS1 = `# Bipolar: records Claude Code lifecycle events for the pane this session runs in.
+# No-op outside Bipolar. Never blocks or alters Claude.
+$ErrorActionPreference = 'SilentlyContinue'
+$pane = $env:SWITCHBOARD_PANE; $dir = $env:SWITCHBOARD_STATE_DIR
+if (-not $pane -or -not $dir -or -not (Test-Path -LiteralPath $dir)) { exit 0 }
+[Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+$data = [Console]::In.ReadToEnd()
+$f = Join-Path $dir $pane
+[IO.File]::WriteAllText("$f.$PID.tmp", $data, (New-Object System.Text.UTF8Encoding $false))
+Move-Item -LiteralPath "$f.$PID.tmp" -Destination "$f.json" -Force
+exit 0
+`;
 function installHookScript() {
   fs.mkdirSync(path.dirname(HOOK_BIN), { recursive: true });
-  if (!fs.existsSync(HOOK_BIN) || fs.readFileSync(HOOK_BIN, 'utf8') !== HOOK_SCRIPT) {
-    fs.writeFileSync(HOOK_BIN, HOOK_SCRIPT, { mode: 0o755 });
+  const body = IS_WIN ? HOOK_PS1 : HOOK_SCRIPT;
+  if (!fs.existsSync(HOOK_BIN) || fs.readFileSync(HOOK_BIN, 'utf8') !== body) {
+    fs.writeFileSync(HOOK_BIN, body, { mode: 0o755 });
   }
 }
+const CLAUDE_SETTINGS = path.join(HOME, '.claude', 'settings.json');
+const HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd'];
 function hooksRegistered() {
-  try {
-    return fs.readFileSync(path.join(HOME, '.claude', 'settings.json'), 'utf8').includes('switchboard/bin/sb-hook');
-  } catch { return false; }
+  try { return fs.readFileSync(CLAUDE_SETTINGS, 'utf8').includes('sb-hook'); } catch { return false; }
+}
+// Only ever run from the "Turn on" button in Settings: the user asks for it explicitly.
+// Adds Bipolar's hook next to whatever hooks already exist, after backing the file up.
+function registerHooks() {
+  let text = '';
+  try { text = fs.readFileSync(CLAUDE_SETTINGS, 'utf8'); } catch {}
+  let st = {};
+  if (text.trim()) {
+    try { st = JSON.parse(text); } catch { return { ok: false, error: 'Claude’s settings.json isn’t valid JSON, so Bipolar left it alone.' }; }
+    if (!fs.existsSync(CLAUDE_SETTINGS + '.bipolar-backup')) fs.writeFileSync(CLAUDE_SETTINGS + '.bipolar-backup', text); // keep the original
+  }
+  const entry = IS_WIN
+    ? { type: 'command', command: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HOOK_BIN], async: true, timeout: 10 }
+    : { type: 'command', command: '"$HOME/.config/switchboard/bin/sb-hook"', timeout: 5 };
+  st.hooks = st.hooks || {};
+  for (const ev of HOOK_EVENTS) {
+    const list = Array.isArray(st.hooks[ev]) ? st.hooks[ev] : [];
+    if (JSON.stringify(list).includes('sb-hook')) { st.hooks[ev] = list; continue; }
+    list.push({ ...(ev === 'PostToolUse' ? { matcher: '*' } : {}), hooks: [entry] });
+    st.hooks[ev] = list;
+  }
+  fs.mkdirSync(path.dirname(CLAUDE_SETTINGS), { recursive: true });
+  fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(st, null, 2));
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------- daemon client
@@ -127,6 +176,7 @@ function startDaemon() {
     detached: true,
     stdio: 'ignore',
     cwd: HOME,
+    windowsHide: true,
     env: { ...daemonEnv(), ELECTRON_RUN_AS_NODE: '1' },
   }).unref();
 }
@@ -194,7 +244,7 @@ async function connectDaemon() {
     await new Promise((r) => setTimeout(r, 600));
     s.destroy();
     sock = null;
-    try { fs.unlinkSync(SOCK); } catch {}
+    if (!IS_WIN) try { fs.unlinkSync(SOCK); } catch {}
     return connectDaemon();
   }
   return h;
@@ -209,8 +259,10 @@ function createWindow() {
     minWidth: 820,
     minHeight: 520,
     title: 'Bipolar',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 18, y: 19 },
+    ...(IS_WIN
+      // Frameless look with Windows' own minimise/maximise/close drawn top-right.
+      ? { titleBarStyle: 'hidden', titleBarOverlay: { color: '#00000000', symbolColor: '#cfc8e8', height: 44 }, icon: path.join(__dirname, 'build', 'icon.png') }
+      : { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 19 } }),
     backgroundColor: '#07070a',
     show: false,
     webPreferences: {
@@ -220,11 +272,13 @@ function createWindow() {
       spellcheck: false,
     },
   });
+  if (IS_WIN) win.setMenuBarVisibility(false); // shortcuts still work; Alt stays free for the terminal
+  if (process.env.SWITCHBOARD_UA) win.webContents.setUserAgent(process.env.SWITCHBOARD_UA); // dev aid: preview the Windows UI
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   // Automated test runs render off-screen and never take focus.
   if (process.env.SWITCHBOARD_SNAPSHOT) { win.setPosition(-6000, 0); win.once('ready-to-show', () => win.showInactive()); }
   else win.once('ready-to-show', () => win.show());
-  win.on('focus', () => win.webContents.send('window:focus', true));
+  win.on('focus', () => { win.webContents.send('window:focus', true); if (IS_WIN) win.flashFrame(false); });
   win.on('blur', () => win.webContents.send('window:focus', false));
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
@@ -249,9 +303,33 @@ function createWindow() {
   }
 }
 
+// On Windows plain Ctrl+letter belongs to the terminal (Ctrl+C, Ctrl+D, Ctrl+R, …), so app
+// shortcuts move to Ctrl+Shift like Windows Terminal. null = no shortcut on Windows.
+const WIN_KEYS = {
+  'Lock Bipolar': null, 'Quit (Sessions Keep Running)': null, 'Quit and End All Sessions…': null,
+  'New Task…': 'Ctrl+Shift+N', 'New Shell Here': 'Ctrl+Shift+T', 'New Claude Here': 'Ctrl+Shift+A',
+  'Archive Task': 'Ctrl+Shift+E', 'Show Changes': 'Ctrl+Shift+G',
+  'Split Right': 'Alt+Shift+=', 'Split Down': 'Alt+Shift+-',
+  'Close Pane': 'Ctrl+Shift+W', 'Close Tab': null, 'Clear Screen': 'Ctrl+Shift+K',
+  'Select All': null, 'Find…': 'Ctrl+Shift+F',
+  'Jump to Anything…': 'Ctrl+Shift+P', 'Next Task Waiting on You': 'Ctrl+Shift+J',
+  'Toggle Sidebar': 'Ctrl+Shift+B',
+};
+function forWindows(items) {
+  return items.filter((it) => !['hide', 'hideOthers', 'unhide', 'about'].includes(it.role) && !(IS_WIN && it.label === 'Lock Bipolar')).map((it) => {
+    const o = { ...it };
+    if (o.submenu) o.submenu = forWindows(o.submenu);
+    if (o.label in WIN_KEYS) { if (WIN_KEYS[o.label]) o.accelerator = WIN_KEYS[o.label]; else delete o.accelerator; }
+    if (o.role === 'copy') o.accelerator = 'Ctrl+Shift+C';
+    if (o.role === 'paste') o.accelerator = 'Ctrl+Shift+V';
+    if (o.role === 'cut' || o.role === 'undo' || o.role === 'redo') o.registerAccelerator = false;
+    return o;
+  }).filter((it, i, a) => !(it.type === 'separator' && (i === 0 || a[i - 1].type === 'separator')));
+}
+
 function buildMenu() {
   const send = (action, arg) => () => win && win.webContents.send('menu', action, arg);
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
+  const tpl = [
     {
       label: 'Bipolar',
       submenu: [
@@ -330,7 +408,8 @@ function buildMenu() {
       ],
     },
     { role: 'windowMenu' },
-  ]));
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(IS_WIN ? forWindows(tpl) : tpl));
 }
 
 // ---------------------------------------------------------------- hook state watcher
@@ -356,7 +435,13 @@ function watchHooks() {
 // ---------------------------------------------------------------- IPC
 ipcMain.handle('config:get', () => loadConfig());
 ipcMain.on('config:save', (_e, cfg) => saveConfig(cfg));
-ipcMain.handle('env', () => ({ home: HOME, version: app.getVersion(), hooks: hooksRegistered() }));
+// Light Claude theme for pastel tasks, as a settings file (PowerShell mangles inline JSON).
+const LIGHT_SETTINGS = path.join(CONFIG_DIR, 'claude-light.json');
+ipcMain.handle('env', () => {
+  if (IS_WIN) try { if (!fs.existsSync(LIGHT_SETTINGS)) fs.writeFileSync(LIGHT_SETTINGS, '{"theme":"light"}'); } catch {}
+  return { home: HOME, version: app.getVersion(), hooks: hooksRegistered(), platform: process.platform, lightSettings: slash(LIGHT_SETTINGS), lock: !IS_WIN };
+});
+ipcMain.handle('hooks:register', () => { try { return registerHooks(); } catch (e) { return { ok: false, error: e.message }; } });
 ipcMain.handle('daemon:hello', async () => { if (!sock) await connectDaemon(); return hello(); });
 ipcMain.handle('uuid', () => crypto.randomUUID());
 
@@ -373,8 +458,30 @@ ipcMain.handle('pty:spawn', (_e, { id, cwd, cols, rows, section, command }) => {
     SWITCHBOARD_SECTION: section,
     SWITCHBOARD_STATE_DIR: STATE_DIR,
   };
-  return request({ t: 'spawn', id, cwd: dir, cols, rows, env, shell: process.env.SHELL || '/bin/zsh', command });
+  return request({ t: 'spawn', id, cwd: dir, cols, rows, env, command, ...(IS_WIN ? winShell() : { shell: process.env.SHELL || '/bin/zsh', args: ['-l'] }) });
 });
+// Windows: PowerShell 7 when installed, else the built-in Windows PowerShell. The prompt is
+// wrapped to report its folder (OSC 9;9, as Windows Terminal does) so splits open in the same place.
+let pwshPath;
+function findOnPath(exe) {
+  for (const d of (process.env.PATH || process.env.Path || '').split(';')) {
+    if (d && fs.existsSync(path.join(d, exe))) return path.join(d, exe);
+  }
+  const pf = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', exe);
+  return fs.existsSync(pf) ? pf : null;
+}
+const PS_INIT = [
+  '$PSNativeCommandArgumentPassing = \'Legacy\'',
+  '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
+  '$global:__bipolarPrompt = $function:prompt',
+  'function global:prompt { $e = [char]27; $p = $executionContext.SessionState.Path.CurrentLocation.ProviderPath; "$e]9;9;`"$p`"$([char]7)" + (& $global:__bipolarPrompt) }',
+].join('; ');
+function winShell() {
+  const ui = loadConfig().ui;
+  if (pwshPath === undefined) pwshPath = findOnPath('pwsh.exe');
+  const shell = ui.shell || pwshPath || 'powershell.exe';
+  return { shell, args: /pwsh|powershell/i.test(shell) ? ['-NoLogo', '-NoExit', '-EncodedCommand', Buffer.from(PS_INIT, 'utf16le').toString('base64')] : [] };
+}
 ipcMain.handle('pty:snapshot', (_e, id) => request({ t: 'snapshot', id }));
 ipcMain.handle('pty:cwd', async (_e, id) => tildify((await request({ t: 'cwd', id })).cwd));
 ipcMain.on('pty:procs-now', () => rawSend({ t: 'procs-now' }));
@@ -481,7 +588,8 @@ ipcMain.handle('dialog:folder', async () => {
 ipcMain.handle('project:create', async (_e, { parent, name, git }) => {
   const clean = String(name || '').trim();
   if (!clean) return { ok: false, error: 'Give it a name.' };
-  if (/[\/:]/.test(clean) || clean.startsWith('.')) return { ok: false, error: 'Names can’t contain / or : or start with a dot.' };
+  if (IS_WIN ? /[<>:"\/\\|?*]/.test(clean) || /[. ]$/.test(clean) : /[\/:]/.test(clean)) return { ok: false, error: IS_WIN ? 'Names can’t contain < > : " / \\ | ? *' : 'Names can’t contain / or : or start with a dot.' };
+  if (clean.startsWith('.')) return { ok: false, error: 'Names can’t start with a dot.' };
   const base = expand(parent || '~/Projects');
   const dir = path.join(base, clean);
   try {
@@ -505,7 +613,9 @@ ipcMain.handle('menu:popup', (_e, items) => new Promise((resolve) => {
   Menu.buildFromTemplate(tpl).popup({ window: win, callback: () => setTimeout(() => finish(null), 50) });
 }));
 ipcMain.on('reveal', (_e, p) => shell.openPath(expand(p)));
-ipcMain.on('open-editor', (_e, p) => execFile('open', ['-a', 'Visual Studio Code', expand(p)]));
+ipcMain.on('open-editor', (_e, p) => (IS_WIN
+  ? spawnProc('cmd.exe', ['/d', '/c', 'code', expand(p)], { windowsHide: true, detached: true, stdio: 'ignore' }).on('error', () => {}).unref()
+  : execFile('open', ['-a', 'Visual Studio Code', expand(p)])));
 ipcMain.on('open-external', (_e, url) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); });
 ipcMain.on('badge', (_e, n) => app.dock?.setBadge(n > 0 ? String(n) : ''));
 ipcMain.on('notify', (_e, { title, body, paneId }) => {
@@ -513,7 +623,7 @@ ipcMain.on('notify', (_e, { title, body, paneId }) => {
   const n = new Notification({ title, body });
   n.on('click', () => { win?.show(); win?.focus(); win?.webContents.send('focus-pane', paneId); });
   n.show();
-  if (!win?.isFocused()) app.dock?.bounce('informational');
+  if (!win?.isFocused()) { app.dock?.bounce('informational'); if (IS_WIN) win?.flashFrame(true); }
 });
 
 // ---------------------------------------------------------------- face lock (portal)
@@ -634,21 +744,45 @@ ipcMain.handle('camera:access', async () => {
   try { return await systemPreferences.askForMediaAccess('camera'); } catch { return false; }
 });
 
+// ---------------------------------------------------------------- windows install
+// The Windows build ships as a folder: on first run it puts Bipolar in the Start menu and on
+// the desktop. The Start-menu shortcut carries the app id, which Windows needs to show toasts.
+const APP_ID = 'com.amoghbajpai.bipolar';
+function winShortcuts() {
+  if (!app.isPackaged || process.env.SWITCHBOARD_SNAPSHOT) return;
+  const icon = path.join(__dirname, 'build', 'icon.ico');
+  const link = { target: process.execPath, cwd: path.dirname(process.execPath), appUserModelId: APP_ID, description: 'Bipolar', ...(fs.existsSync(icon) ? { icon, iconIndex: 0 } : {}) };
+  const startMenu = path.join(process.env.APPDATA || '', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Bipolar.lnk');
+  try { shell.writeShortcutLink(startMenu, fs.existsSync(startMenu) ? 'replace' : 'create', link); } catch {}
+  const marker = path.join(CONFIG_DIR, '.desktop-shortcut');
+  if (!fs.existsSync(marker)) {
+    try { shell.writeShortcutLink(path.join(app.getPath('desktop'), 'Bipolar.lnk'), 'create', link); } catch {}
+    try { fs.writeFileSync(marker, new Date().toISOString()); } catch {}
+  }
+}
+
 // ---------------------------------------------------------------- lifecycle
 app.setName('Bipolar');
+if (IS_WIN) {
+  app.setAppUserModelId(APP_ID);
+  // One window: opening Bipolar again brings the running one forward.
+  if (!process.env.SWITCHBOARD_SNAPSHOT && !app.requestSingleInstanceLock()) app.exit(0);
+  app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } });
+}
 app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark';
   session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'media'));
   session.defaultSession.setPermissionCheckHandler((_wc, perm) => perm === 'media');
-  // Re-lock when the Mac locks or sleeps.
-  for (const ev of ['lock-screen', 'suspend']) powerMonitor.on(ev, () => win?.webContents.send('portal:lock'));
+  // Re-lock when the Mac locks or sleeps (the Windows build has no lock).
+  if (!IS_WIN) for (const ev of ['lock-screen', 'suspend']) powerMonitor.on(ev, () => win?.webContents.send('portal:lock'));
   // Back at the Mac: let the camera come back, then the portal scans.
-  for (const ev of ['unlock-screen', 'resume']) powerMonitor.on(ev, () => setTimeout(() => win?.webContents.send('portal:wake'), 900));
+  if (!IS_WIN) for (const ev of ['unlock-screen', 'resume']) powerMonitor.on(ev, () => setTimeout(() => win?.webContents.send('portal:wake'), 900));
   try { installHookScript(); } catch {}
   watchHooks();
   watchImports();
   buildMenu();
-  if (!process.env.SWITCHBOARD_SNAPSHOT) faceUp(); // warm the face model in the background
+  if (IS_WIN) winShortcuts();
+  else if (!process.env.SWITCHBOARD_SNAPSHOT) faceUp(); // warm the face model in the background
   try { await connectDaemon(); } catch (e) { dialog.showErrorBox('Bipolar', e.message); }
   createWindow();
 });

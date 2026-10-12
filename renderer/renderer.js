@@ -42,6 +42,15 @@ const git = {};             // path -> {branch, dirty, ahead, behind}
 
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const IS_WIN = navigator.userAgent.includes('Windows');
+const SHELL_RE = /^-?(zsh|bash|fish|sh|login|pwsh|powershell|cmd)$/i;
+const isShellProc = (p) => !p || SHELL_RE.test(p);
+const modKey = (e) => (IS_WIN ? e.ctrlKey : e.metaKey); // ⌘ on the Mac, Ctrl on Windows
+// Shortcut labels are written Mac-style; on Windows show what the Windows menu actually binds.
+const WIN_LABELS = { '⇧⌘C': 'Ctrl+Shift+G', '⇧⌘D': 'Alt+Shift+-', '⇧⌘W': 'Ctrl+Shift+W', '⇧⌘T': 'Ctrl+Shift+A', '⌥⌘Q': '',
+  '⌘N': 'Ctrl+Shift+N', '⌘P': 'Ctrl+Shift+P', '⌘1': 'Ctrl+1', '⌘2': 'Ctrl+2', '⌘,': 'Ctrl+,', '⌘E': 'Ctrl+Shift+E',
+  '⌘T': 'Ctrl+Shift+T', '⌘D': 'Alt+Shift+=', '⌘B': 'Ctrl+Shift+B', '⌘↵': 'Ctrl+Enter', '⌥↵': 'Alt+Enter', '⌘Q': 'closing the window', '⌘-click': 'Ctrl+click' };
+const keyLabel = (s) => (IS_WIN ? String(s).replace(/⌘-click|[⇧⌥]*⌘[^\s)·]|⌥↵/g, (k) => WIN_LABELS[k] ?? k) : s);
 const isClaudeProc = (p) => p === 'claude' || /^\d+\.\d+\.\d+/.test(p || '');
 const tabOf = (paneId) => tabs.find((t) => leaves(t.root).includes(paneId));
 const currentTab = () => tabs.find((t) => t.id === current[active]);
@@ -127,8 +136,8 @@ function makePane({ id, section, name, path }) {
   term.loadAddon(u11);
   term.unicode.activeVersion = '11';
   term.loadAddon(new ClipboardAddon.ClipboardAddon()); // OSC 52 copy, as in iTerm2
-  term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => { if (e.metaKey) sb.openExternal(uri); }, {
-    hover: (e, uri) => { host.title = `⌘-click to open ${uri}`; },
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => { if (modKey(e)) sb.openExternal(uri); }, {
+    hover: (e, uri) => { host.title = keyLabel(`⌘-click to open ${uri}`); },
     leave: () => { host.title = ''; },
   }));
   term.open(host);
@@ -159,12 +168,37 @@ function makePane({ id, section, name, path }) {
   return p;
 }
 
-const shq = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+const shq = (s) => (IS_WIN ? psq(s) : /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+// PowerShell quoting. The shell runs with legacy native-argument passing, so double quotes
+// inside are backslash-escaped for the program's own (MSVCRT) argument parser.
+function psq(s) {
+  if (/^[\w./:\\-]+$/.test(s)) return s;
+  const native = s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1');
+  return `'${native.replace(/'/g, "''")}'`;
+}
+// Run b only if a fails (PowerShell 5 has no ||).
+const orElse = (a, b) => (IS_WIN ? `${a}; if (-not $?) { ${b} }` : `${a} || ${b}`);
 const cleanTitle = (t) => (t || '').replace(/^[\s⠀-⣿✳✢✶✻✽·*⠀-⣿]+/, '').trim();
 
 function keyHandler(p, e) {
   const down = e.type === 'keydown';
-  if (e.metaKey) {
+  if (IS_WIN) {
+    const k = e.key.toLowerCase();
+    // Windows Terminal habits: Ctrl+C copies when text is selected (else interrupts), Ctrl+V pastes.
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && k === 'c' && p.term.hasSelection()) {
+      if (down) { navigator.clipboard.writeText(p.term.getSelection()); p.term.clearSelection(); }
+      return false;
+    }
+    if (e.ctrlKey && e.shiftKey && !e.altKey && k === 'c') {
+      if (down && p.term.hasSelection()) navigator.clipboard.writeText(p.term.getSelection());
+      return false;
+    }
+    if (e.ctrlKey && !e.altKey && k === 'v') return false; // browser fires a paste event
+    if (e.ctrlKey && e.shiftKey && /^[a-z]$/.test(k)) return false; // app shortcuts (Ctrl+Shift+…)
+    if (e.altKey && e.shiftKey && (k === '=' || k === '+' || k === '-' || k === '_')) return false; // splits
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && /^[0-9=,-]$/.test(k)) return false;
+  }
+  if (e.metaKey && !IS_WIN) {
     // Natural text editing, like iTerm2's preset.
     if (down && e.key === 'ArrowLeft') sb.write(p.id, '\x01');
     else if (down && e.key === 'ArrowRight') sb.write(p.id, '\x05');
@@ -567,7 +601,7 @@ function tabSubtitle(tab) {
     if (p.state === 'working') return p.title ? `Working · ${p.title}` : 'Working…';
     return p.title && p.title !== tab.name ? p.title : 'Ready';
   }
-  if (p.proc && !/^(zsh|bash|fish|-zsh|login)$/.test(p.proc)) return p.proc;
+  if (p.proc && !isShellProc(p.proc)) return p.proc;
   return p.path;
 }
 
@@ -645,7 +679,7 @@ async function tabMenu(t) {
     { id: 'colour', label: 'Colour & Font…' },
     { id: 'move', label: `Move to ${LABEL[other]}` },
     '-',
-    { id: 'reveal', label: 'Reveal in Finder' },
+    { id: 'reveal', label: IS_WIN ? 'Show in Explorer' : 'Reveal in Finder' },
     { id: 'code', label: 'Open in VS Code' },
     '-',
     { id: 'close', label: 'Close Tab' },
@@ -770,7 +804,7 @@ function sessLabel(t) {
   if (t.name && norm(t.name) !== norm(proj) && t.name !== 'Home') return t.name;
   if (p?.title && norm(p.title) !== norm(proj)) return p.title;
   if (p && (p.claudeRunning || p.claudeSession)) return 'New conversation';
-  if (p?.proc && !/^-?(zsh|bash|fish|login)$/.test(p.proc)) return p.proc;
+  if (p?.proc && !isShellProc(p.proc)) return p.proc;
   return 'Shell';
 }
 function dur(ms) {
@@ -788,7 +822,7 @@ function taskLine(t) {
     case 'working': return `working${p.workStart ? ` · ${dur(Date.now() - p.workStart)}` : ''}`;
     case 'done': return `finished${ch}`;
     case 'idle': return `ready${ch}`;
-    default: return p?.proc && !/^-?(zsh|bash|fish|login)$/.test(p.proc) ? `running ${p.proc}` : 'shell';
+    default: return p?.proc && !isShellProc(p.proc) ? `running ${p.proc}` : 'shell';
   }
 }
 function taskRow(t, { showSection = false } = {}) {
@@ -827,7 +861,7 @@ function renderSidebar() {
     + group('ready', 'Ready', ready)
     + group('shells', 'Shells', shells, { foldable: true })
     + group('archive', 'Archive', archived, { foldable: true, archive: true });
-  if (!mine.length && !needs.length) html = `<li class="hint-row">No tasks in ${LABEL[active]} yet. Start one with ⌘N.</li>` + html;
+  if (!mine.length && !needs.length) html = `<li class="hint-row">No tasks in ${LABEL[active]} yet. Start one with ${keyLabel('⌘N')}.</li>` + html;
   if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
   for (const s of SECTIONS) {
     $(`#seg button[data-section="${s}"]`).classList.toggle('alert', s !== active && needs.some((t) => t.section === s));
@@ -884,7 +918,7 @@ function nextPastel() {
 // Pastel paper needs Claude's light theme so its own greys stay readable.
 function claudeCmd(tab, args) {
   const light = THEMES.get(tab?.theme).light;
-  return `claude${light ? ` --settings '{"theme":"light"}'` : ''} ${args}`;
+  return `claude${light ? (IS_WIN ? ` --settings ${shq(env.lightSettings)}` : ` --settings '{"theme":"light"}'`) : ''} ${args}`;
 }
 function applyTheme(tab) {
   const th = THEMES.get(tab.theme);
@@ -918,7 +952,7 @@ function themeCard(th, on) {
 function openThemes() {
   const t = currentTab();
   const groups = ['Pastels', 'Apple Terminal', 'Loved', 'Bipolar'];
-  $('#th-groups').innerHTML = groups.map((g) => `<h4>${g === 'Apple Terminal' ? 'Your Mac’s Terminal' : g === 'Loved' ? 'Loved by everyone' : g}</h4>
+  $('#th-groups').innerHTML = groups.map((g) => `<h4>${g === 'Apple Terminal' ? (IS_WIN ? 'From the Mac’s Terminal' : 'Your Mac’s Terminal') : g === 'Loved' ? 'Loved by everyone' : g}</h4>
     <div class="th-grid">${THEMES.list.filter((x) => x.group === g).map((x) => themeCard(x, t && t.theme === x.id)).join('')}</div>`).join('');
   $('#th-fonts').innerHTML = THEMES.FONTS.map((f) => `<button class="fnt ${cfg.ui.font === f.id ? 'on' : ''}" data-font="${f.id}" style="font-family:${f.css}">${esc(f.name)}<small>${esc(f.note)}</small></button>`).join('');
   $('#th-auto').checked = cfg.ui.autoPastel !== false;
@@ -1018,7 +1052,7 @@ $('#c-add').addEventListener('click', () => {
 $('#composer').addEventListener('mousedown', (e) => { if (e.target.id === 'composer') closeOverlay($('#composer')); });
 $('#c-brief').addEventListener('keydown', (e) => {
   e.stopPropagation();
-  if (e.key === 'Enter' && e.metaKey) { e.preventDefault(); startComposed(); }
+  if (e.key === 'Enter' && modKey(e)) { e.preventDefault(); startComposed(); }
   if (e.key === 'Escape') closeOverlay($('#composer'));
   if (e.key === 'Tab') { e.preventDefault(); composeSel = (composeSel + (e.shiftKey ? -1 : 1) + composeProjects().length) % composeProjects().length; renderComposeProjects(); }
 });
@@ -1237,7 +1271,7 @@ function paletteSource() {
       });
     }
   }
-  const cmd = (title, icon, run, sub = '') => items.push({ group: 'Commands', key: title, title, sub, icon: `<span class="ic">${icon}</span>`, run });
+  const cmd = (title, icon, run, sub = '') => items.push({ group: 'Commands', key: title, title, sub: keyLabel(sub), icon: `<span class="ic">${icon}</span>`, run });
   cmd('New Claude session here', ICON.spark, () => menuAction('new-claude'), '⇧⌘T');
   cmd('New shell here', ICON.prompt, () => menuAction('new-tab'), '⌘T');
   cmd('Split right', ICON.split, () => splitPane('row'), '⌘D');
@@ -1277,7 +1311,7 @@ function renderPalette() {
   const html = palette.items.map((it, i) => {
     const head = !q && it.group !== lastGroup ? `<li class="grp">${it.group}</li>` : '';
     lastGroup = it.group;
-    const tag = it.section ? `<span class="tag ${it.section}">${LABEL[it.section]}</span>` : it.sub && it.group === 'Commands' ? `<kbd>${esc(it.sub)}</kbd>` : '';
+    const tag = it.section ? `<span class="tag ${it.section}">${LABEL[it.section]}</span>` : it.sub && it.group === 'Commands' ? (it.sub ? `<kbd>${esc(it.sub)}</kbd>` : '') : '';
     return `${head}<li class="it ${i === palette.sel ? 'sel' : ''}" data-i="${i}">${it.icon}<span><b>${it.html}</b>${it.group !== 'Commands' ? `<small>${esc(it.sub)}</small>` : ''}</span>${tag}</li>`;
   }).join('') || `<li class="none">Nothing matches “${esc(q)}”.</li>`;
   $('#palette-list').innerHTML = html;
@@ -1311,8 +1345,28 @@ function openSettings() {
   $('#set-notify').checked = cfg.ui.notify;
   $('#hooks-state').innerHTML = env.hooks
     ? 'On. Claude reports exactly when it is working, waiting for permission, or done.'
-    : 'Estimated from terminal activity. For exact status, register Bipolar’s hook with Claude Code: add <code>~/.config/switchboard/bin/sb-hook</code> as a hook for SessionStart, UserPromptSubmit, PostToolUse, Notification, Stop and SessionEnd.';
+    : 'Estimated from terminal activity. For exact status, let Bipolar add its hook to Claude Code’s settings (your current settings are backed up first). <button id="hooks-on" class="pill-btn">Turn on</button>';
   el.hidden = false;
+}
+async function turnOnHooks() {
+  const r = await sb.registerHooks();
+  if (!r.ok) return toast(r.error || 'Couldn’t turn on precise status');
+  env = await sb.env();
+  toast('Precise status is on. Claude sessions you start from now report it exactly.');
+  if (!$('#settings').hidden) openSettings();
+}
+document.addEventListener('click', (e) => { if (e.target.closest('#hooks-on')) { e.stopPropagation(); turnOnHooks(); } }, true);
+// Windows: ask once on first launch, because nobody goes looking in Settings.
+async function offerHooks() {
+  if (!IS_WIN || env.hooks || cfg.ui.hooksOffered) return;
+  cfg.ui.hooksOffered = true;
+  persist();
+  const ok = await confirmBox({
+    title: 'Let Bipolar see what Claude is doing?',
+    body: 'Bipolar adds a small hook to Claude Code’s settings so it knows exactly when Claude is working, done, or waiting for you. Your current settings are backed up first. You can do this later from Settings.',
+    yes: 'Turn it on',
+  });
+  if (ok) turnOnHooks();
 }
 $('#settings').addEventListener('click', (e) => {
   if (e.target.id === 'settings' || e.target.closest('[data-close]')) return closeOverlay($('#settings'));
@@ -1353,7 +1407,7 @@ function confirmBox({ title, body, yes }) {
 async function confirmQuitAll() {
   const ok = await confirmBox({
     title: `End all ${panes.size} sessions?`,
-    body: 'Every shell and Claude session stops. Claude conversations can still be resumed later with /resume. To keep them running, quit with ⌘Q instead.',
+    body: 'Every shell and Claude session stops. Claude conversations can still be resumed later with /resume. To keep them running, quit with ' + keyLabel('⌘Q') + ' instead.',
     yes: 'End sessions and quit',
   });
   if (ok) sb.quitAll();
@@ -1395,7 +1449,7 @@ function menuAction(action, arg) {
     case 'font': setFont(arg); break;
     case 'settings': openSettings(); break;
     case 'quit-all': confirmQuitAll(); break;
-    case 'lock': Portal.lock(); break;
+    case 'lock': if (!IS_WIN) Portal.lock(); break;
     case 'compose': openComposer(); break;
     case 'archive': archiveTask(t); break;
     case 'changes': openDrawer(); break;
@@ -1479,7 +1533,7 @@ document.addEventListener('paste', async (e) => {
   const fileUrls = (dt.getData('text/uri-list') || '').split(/\r?\n/).filter((u) => u.startsWith('file://'));
   const files = [...dt.files];
   const paths = files.map((f) => { try { return sb.pathForFile(f); } catch { return ''; } }).filter(Boolean)
-    .concat(fileUrls.map((u) => decodeURIComponent(new URL(u).pathname)));
+    .concat(fileUrls.map((u) => decodeURIComponent(new URL(u).pathname).replace(/^\/([A-Za-z]:)/, '$1')));
   if (paths.length) {
     e.preventDefault(); e.stopImmediatePropagation();
     p.term.paste([...new Set(paths)].map(shq).join(' ') + ' ');
@@ -1488,7 +1542,7 @@ document.addEventListener('paste', async (e) => {
   const isImage = files.some((f) => f.type.startsWith('image/')) || [...dt.types].some((t) => t.startsWith('image/'));
   if (!isImage || text) return; // ordinary text paste: let the terminal handle it
   e.preventDefault(); e.stopImmediatePropagation();
-  if (p.claudeRunning) { sb.write(p.id, '\x16'); return; }
+  if (p.claudeRunning) { sb.write(p.id, IS_WIN ? '\x1bv' : '\x16'); return; } // Claude's paste-image key
   const file = await sb.clipboardImage();
   if (file) p.term.paste(shq(file) + ' ');
 }, true);
@@ -1542,11 +1596,22 @@ $('#new-tab').addEventListener('click', () => menuAction('new-tab'));
 $('#close-btn').addEventListener('click', () => menuAction('close-tab'));
 $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 'row'));
 
+// Windows: label shortcuts the Windows way and leave room for the caption buttons.
+if (IS_WIN) {
+  document.body.classList.add('win');
+  for (const k of $$('kbd')) k.textContent = keyLabel(k.textContent);
+  for (const el of $$('[title]')) el.title = keyLabel(el.title);
+  const meta = $('#set-meta')?.closest('.set-row');
+  if (meta) meta.hidden = true; // Alt already acts as Meta on Windows
+}
+
 (async function boot() {
   Portal.init({ onOpen: () => { focusedPane()?.term.focus(); const t = currentTab(); if (t) requestAnimationFrame(() => refit(t)); } });
-  Portal.lock({ scanNow: true }); // just opened Bipolar: you're here, look straight away
+  // Windows build: no lock screen at all, straight into work.
+  if (IS_WIN) { $('#portal').hidden = true; document.body.classList.remove('locked'); }
+  else Portal.lock({ scanNow: true }); // just opened Bipolar: you're here, look straight away
   cfg = await sb.getConfig();
-  cfg.ui.font = cfg.ui.font || 'sfmono'; // the Terminal.app font by default
+  cfg.ui.font = cfg.ui.font || (IS_WIN ? 'cascadia' : 'sfmono'); // the system terminal's font by default
   await Promise.all(["13px 'SF Mono Terminal'", "bold 13px 'SF Mono Terminal'", "13px 'JetBrains Mono'", "13px 'Geist Mono'"].map((f) => document.fonts.load(f).catch(() => {})));
   env = await sb.env();
   if (cfg.ui.sideW) document.documentElement.style.setProperty('--side-w', cfg.ui.sideW + 'px');
@@ -1602,7 +1667,7 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
     if (p._restore === 'attach') { await attachPane(p); restored.live++; }
     else if (p._restore === 'resume') {
       const tb = tabOf(p.id);
-      await spawnPane(p, `${claudeCmd(tb, `--resume ${p.claudeSession}`)} || ${claudeCmd(tb, `--session-id ${p.claudeSession}`)}`);
+      await spawnPane(p, orElse(claudeCmd(tb, `--resume ${p.claudeSession}`), claudeCmd(tb, `--session-id ${p.claudeSession}`)));
       restored.resumed++;
     } else if (p._restore === 'prefill') {
       // Typed but not run: the conversation is still open elsewhere; press Enter once it's closed there.
@@ -1617,6 +1682,7 @@ $('#split-btn').addEventListener('click', (e) => splitPane(e.shiftKey ? 'col' : 
   runImport();
   setInterval(watchHandoffs, 1500);
   renderAttention();
+  setTimeout(offerHooks, 1200);
   refreshGit();
   setInterval(scanScreens, 700);
   setInterval(refreshGit, 20000);

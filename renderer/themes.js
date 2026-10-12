@@ -70,7 +70,12 @@ const THEMES = (() => {
   ];
   const byId = Object.fromEntries(list.map((x) => [x.id, x]));
   const PASTELS = list.filter((x) => x.group === 'Pastels').map((x) => x.id);
-  const FONTS = [
+  const FONTS = navigator.userAgent.includes('Windows') ? [
+    { id: 'cascadia', name: 'Cascadia Mono', css: "'Cascadia Mono', 'Cascadia Code', Consolas, monospace", note: 'Windows Terminal' },
+    { id: 'consolas', name: 'Consolas', css: "Consolas, monospace", note: 'classic Windows' },
+    { id: 'jetbrains', name: 'JetBrains Mono', css: "'JetBrains Mono', Consolas, monospace", note: 'for code' },
+    { id: 'geist', name: 'Geist Mono', css: "'Geist Mono', Consolas, monospace", note: 'Bipolar' },
+  ] : [
     { id: 'sfmono', name: 'SF Mono', css: "'SF Mono Terminal', 'SF Mono', Menlo, monospace", note: 'Terminal.app' },
     { id: 'menlo', name: 'Menlo', css: "Menlo, monospace", note: 'classic macOS' },
     { id: 'monaco', name: 'Monaco', css: "Monaco, monospace", note: 'vintage macOS' },
