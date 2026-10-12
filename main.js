@@ -293,7 +293,9 @@ function createWindow() {
       const steps = JSON.parse(process.env.SWITCHBOARD_STEPS || '[]');
       for (let i = 0; i < steps.length; i++) {
         const [js, ms] = Array.isArray(steps[i]) ? steps[i] : [steps[i], 1500];
-        try { const r = await win.webContents.executeJavaScript(js); if (r !== undefined) console.log(`step ${i}:`, JSON.stringify(r)); } catch (e) { console.error('step', i, e.message); }
+        // Results also go to <prefix>-log.txt: a packaged Windows app has no console to print to.
+        const log = (line) => { console.log(line); try { fs.appendFileSync(`${snap}-log.txt`, line + '\n'); } catch {} };
+        try { const r = await win.webContents.executeJavaScript(js); if (r !== undefined) log(`step ${i}: ${JSON.stringify(r)}`); } catch (e) { log(`step ${i} ERROR ${e.message}`); }
         await wait(ms);
         fs.writeFileSync(`${snap}-${i}.png`, (await win.webContents.capturePage()).toPNG());
       }
