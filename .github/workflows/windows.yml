@@ -7,8 +7,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - name: Install Claude Code (native)
@@ -20,16 +20,17 @@ jobs:
       - run: npm run build:win
       - name: End-to-end test on Windows
         run: node test/e2e-win.js
+        env:
+          BIPOLAR_E2E_DIR: ${{ github.workspace }}/e2e-out
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: e2e-evidence
           path: |
-            ${{ runner.temp }}/bipolar-e2e-*/*.png
-            ${{ runner.temp }}/bipolar-e2e-*/*.txt
-            ~/.config/switchboard/*.log
+            e2e-out/*/*.png
+            e2e-out/*/*.txt
       - if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: Bipolar-Windows-x64
           path: dist/Bipolar-win32-x64

@@ -4,13 +4,15 @@
 //   run 1 drives a PowerShell pane (prompt, folder tracking, argument quoting, fallbacks,
 //   the Claude hook, Claude detection), run 2 checks the session survived the app quitting.
 'use strict';
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const exe = path.resolve(process.argv[2] || path.join(__dirname, '..', 'dist', 'Bipolar-win32-x64', 'Bipolar.exe'));
-const cfgDir = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'bipolar-e2e-'));
+const outRoot = process.env.BIPOLAR_E2E_DIR || os.tmpdir();
+fs.mkdirSync(outRoot, { recursive: true });
+const cfgDir = fs.mkdtempSync(path.join(outRoot, 'bipolar-e2e-'));
 const results = [];
 let failed = 0;
 const check = (name, ok, detail) => {
@@ -34,10 +36,17 @@ const HELPERS = `(() => {
 
 const step = (js, ms = 300) => [`(async () => { ${js} })()`, ms];
 
-function launch(name, steps) {
+// Waits for the app process itself to exit (the session daemon it leaves running may hold
+// inherited pipes open, so waiting for stdio to close would hang).
+async function launch(name, steps) {
   const snap = path.join(cfgDir, name);
   const env = { ...process.env, SWITCHBOARD_CONFIG_DIR: cfgDir, SWITCHBOARD_SNAPSHOT: snap, SWITCHBOARD_STEPS: JSON.stringify([[HELPERS, 200], ...steps]) };
-  const r = spawnSync(exe, [], { env, timeout: 240000, encoding: 'utf8' });
+  const r = await new Promise((resolve) => {
+    const child = spawn(exe, [], { env, stdio: 'ignore' });
+    const t = setTimeout(() => { child.kill(); resolve({ error: 'timed out after 240s' }); }, 240000);
+    child.on('exit', (code) => { clearTimeout(t); resolve({ code }); });
+    child.on('error', (e) => { clearTimeout(t); resolve({ error: e.message }); });
+  });
   const log = fs.existsSync(`${snap}-log.txt`) ? fs.readFileSync(`${snap}-log.txt`, 'utf8') : '';
   if (r.error) check(`${name}: app launched`, false, String(r.error));
   const out = {};
@@ -49,9 +58,10 @@ function launch(name, steps) {
   return out;
 }
 
+(async () => {
 // ------------------------------------------------------------------ run 1
 const HOOK = path.join(os.homedir(), '.config', 'switchboard', 'bin', 'sb-hook.ps1');
-const r1 = launch('run1', [
+const r1 = await launch('run1', [
   step(`return { win: IS_WIN, portal: !document.getElementById('portal').hidden, locked: document.body.classList.contains('locked'), font: cfg.ui.font, newTask: document.querySelector('#new-task kbd').textContent };`),
   step(`await openTab(active, { name: 'Home', path: '~' });
         const ok = await T.until(() => /PS .*>/.test(T.screen()));
@@ -90,7 +100,7 @@ check('Windows mode detected', r1[0]?.win === true, r1[0]);
 check('no lock screen', r1[0] && !r1[0].portal && !r1[0].locked, r1[0]);
 check('Windows font + shortcut labels', r1[0]?.font === 'cascadia' && r1[0]?.newTask === 'Ctrl+Shift+N', r1[0]);
 check('PowerShell prompt appears in a pane', r1[1]?.prompt === true, r1[1]);
-check('shell reported as the foreground process', /^(pwsh|powershell)$/.test(r1[1]?.proc || ''), r1[1]);
+check('idle shell reported as the shell (pwsh/powershell)', /^(pwsh|powershell)$/.test(r1[1]?.proc || ''), r1[1]);
 check('folder tracking follows cd (splits open there)', (r1[2]?.cwd || '').toLowerCase().replace(/\\/g, '/').includes(path.basename(os.tmpdir()).toLowerCase()), r1[2]);
 check('quoted arguments reach programs intact', JSON.stringify(r1[3]?.expected) === JSON.stringify(r1[3]?.got), r1[3]);
 check('resume-or-start fallback works', r1[4]?.fallback && r1[4]?.skipped, r1[4]);
@@ -110,7 +120,7 @@ try {
 } catch (e) { check('settings.json readable', false, e.message); }
 
 // ------------------------------------------------------------------ run 2: the session outlived the app
-const r2 = launch('run2', [
+const r2 = await launch('run2', [
   step(`await T.wait(1500); const p = T.pane();
         return { id: p?.id, restored: /^BIPOLAR-MARK-4242/m.test(T.screen(60)) };`),
   step(`T.run('Write-Output STILL-ALIVE'); const ok = await T.until(() => /^STILL-ALIVE/m.test(T.screen()));
@@ -124,3 +134,4 @@ check('restored shell still responds', r2[1]?.alive, r2[1]);
 console.log('\n' + results.join('\n'));
 console.log(`\n${results.length - failed}/${results.length} passed`);
 process.exit(failed ? 1 : 0);
+})();

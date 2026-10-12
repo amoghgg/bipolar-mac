@@ -39,7 +39,9 @@ function spawn({ id, cwd, cols, rows, env, shell, args, command }) {
   head.loadAddon(ser);
   head.loadAddon(new Unicode11Addon());
   head.unicode.activeVersion = '11';
-  const pane = { p, head, ser, cwd, meta: { id, cwd, pid: p.pid, started: Date.now() } };
+  // node-pty on Windows reports the terminal name as `process`, so remember the shell's own name.
+  const shellName = path.basename(String(shell || (IS_WIN ? 'powershell' : 'zsh'))).replace(/\.exe$/i, '').toLowerCase();
+  const pane = { p, head, ser, cwd, shellName, meta: { id, cwd, pid: p.pid, started: Date.now() } };
   panes.set(id, pane);
   // Run the startup command only once the shell has drawn its prompt (output went
   // quiet), so it isn't echoed twice the way typing ahead of zsh would be.
@@ -160,7 +162,7 @@ setInterval(() => {
   const procs = {};
   for (const [id, x] of panes) {
     try {
-      procs[id] = IS_WIN ? winForeground(x.p.pid, path.basename(String(x.p.process || 'powershell')).replace(/\.exe$/i, '').toLowerCase()) : x.p.process;
+      procs[id] = IS_WIN ? winForeground(x.p.pid, x.shellName) : x.p.process;
     } catch {}
   }
   const s = JSON.stringify(procs);
