@@ -210,7 +210,7 @@ const Deck = (() => {
       const last = i === steps.length - 1;
       const status = s.status === 'running' && !last && st !== 'working' ? 'done' : s.status;
       if (s.kind === 'you') return `<li class="you"><i class="node">${G.you}</i><div><q>${esc(s.what)}</q><time>${since(s.at)}</time></div></li>`;
-      return `<li class="${s.kind} ${status}"><i class="node">${G[s.kind] || G.tool}</i><div><span class="verb">${esc(s.verb)}</span> <span class="what">${esc(s.what)}</span>${s.note ? `<small>${esc(s.note)}</small>` : ''}<time>${status === 'running' ? 'now' : since(s.at)}</time></div></li>`;
+      return `<li class="${s.kind} ${status}"><i class="node">${G[s.kind] || G.tool}</i><div><span class="verb">${esc(s.verb)}</span> <span class="what">${esc(s.what)}</span><time>${status === 'running' ? 'now' : since(s.at)}</time>${s.note ? `<small>${esc(s.note)}</small>` : ''}</div></li>`;
     }).join('') || `<li class="empty"><div>Steps appear here as ${esc(p.agent)} works.</div></li>`;
     if (d.html['.thread'] !== thread) {
       const ol = $('.thread', d.el);
