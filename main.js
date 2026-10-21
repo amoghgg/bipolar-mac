@@ -5,6 +5,7 @@ const os = require('os');
 const net = require('net');
 const crypto = require('crypto');
 const { spawn: spawnProc, execFile } = require('child_process');
+const agentFeed = require('./agentfeed');
 
 const HOME = os.homedir();
 const IS_WIN = process.platform === 'win32';
@@ -447,6 +448,15 @@ const AGENTS_DIR = path.join(HOME, '.claude', 'agents');
 // One-line labels for the sidebar; agents without one show the start of their description.
 const AGENT_TAGS = { 'data-desk': 'Excel jobs, allocations, FINAL_DATA', 'design-critic': 'UI review + design library', 'device-runner': 'Builds on the tablet over adb',
   inbox: 'Your WhatsApp chats and files', ship: 'Deploy → verify → commit', 'wa-campaign': 'WhatsApp campaigns on Gupshup' };
+// One-click starting prompts on the Agents home screen.
+const AGENT_STARTERS = {
+  'data-desk': ['Process the latest Excel I got on WhatsApp', 'Verify the website data against the latest master Excel', 'Run a new centre allocation — I\'ll give the exam details'],
+  'design-critic': ['Review the screen I\'m working on', 'Research free UI kits and motion for my ops dashboards', 'Audit amoghbajpai.com for anything that looks templated'],
+  'device-runner': ['Install the demo build on the tablet and walk every screen', 'Measure jank on the verification flow'],
+  inbox: ['What files did I get on WhatsApp today?', 'Find the latest Excel from the OTR group and file it'],
+  ship: ['Deploy and verify what\'s uncommitted here', 'Commit my changes, one commit per change'],
+  'wa-campaign': ['Plan a new WhatsApp campaign', 'Report replies for the running campaign by district'],
+};
 const AGENT_DIRS = { 'data-desk': '~/OTR', 'device-runner': '~/Projects/mobile-android', ship: '~/Projects/seqrview', inbox: '~/Inbox/WhatsApp' };
 function frontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
@@ -466,9 +476,17 @@ ipcMain.handle('agents:list', () => {
     try { fm = frontmatter(fs.readFileSync(path.join(AGENTS_DIR, f), 'utf8')); } catch {}
     const name = fm.name || f.replace(/\.md$/, '');
     const dir = dirs[name] && fs.existsSync(expand(dirs[name])) ? dirs[name] : '~';
-    return { name, description: fm.description || '', tag: AGENT_TAGS[name] || '', dir, file: tildify(path.join(AGENTS_DIR, f)) };
+    return { name, description: fm.description || '', tag: AGENT_TAGS[name] || '', starters: AGENT_STARTERS[name] || [], dir, file: tildify(path.join(AGENTS_DIR, f)) };
   }).sort((a, b) => a.name.localeCompare(b.name));
 });
+ipcMain.handle('agent:feed', (_e, session) => { try { return agentFeed.feed(session); } catch (e) { return { found: false, error: e.message }; } });
+ipcMain.handle('agent:summaries', (_e, sessions) => {
+  const out = {};
+  for (const [name, session] of Object.entries(sessions || {})) { try { out[name] = agentFeed.summary(session); } catch {} }
+  return out;
+});
+ipcMain.on('file:open', (_e, p) => shell.openPath(expand(p)));
+ipcMain.on('file:show', (_e, p) => shell.showItemInFolder(expand(p)));
 // Background watchers: plain scripts run by launchd, not Claude. Each reports a status file.
 const WATCHERS = [{ id: 'wa-inbox', name: 'WhatsApp inbox', label: 'com.bipolar.wa-inbox',
   script: path.join(HOME, '.config', 'switchboard', 'agents', 'wa-inbox.py'), status: path.join(HOME, 'Inbox', 'WhatsApp', '.status.json'), folder: '~/Inbox/WhatsApp' }];

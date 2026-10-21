@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('sb', {
   agents: () => ipcRenderer.invoke('agents:list'),
   watchers: () => ipcRenderer.invoke('watchers:status'),
   runWatcher: (id) => ipcRenderer.invoke('watchers:run', id),
+  agentFeed: (session) => ipcRenderer.invoke('agent:feed', session),
+  agentSummaries: (map) => ipcRenderer.invoke('agent:summaries', map),
+  openFile: (p) => ipcRenderer.send('file:open', p),
+  showFile: (p) => ipcRenderer.send('file:show', p),
 
   spawn: (opts) => ipcRenderer.invoke('pty:spawn', opts),
   snapshot: (id) => ipcRenderer.invoke('pty:snapshot', id),

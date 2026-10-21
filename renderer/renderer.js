@@ -76,7 +76,7 @@ const persist = debounce(() => {
   cfg.session = {
     active,
     current: { ...current },
-    tabs: tabs.map((t) => ({ id: t.id, section: t.section, name: t.name, path: t.path, focus: t.focus, createdAt: t.createdAt, theme: t.theme, named: t.named || undefined, root: ser(t.root) })),
+    tabs: tabs.map((t) => ({ id: t.id, section: t.section, name: t.name, path: t.path, focus: t.focus, createdAt: t.createdAt, theme: t.theme, named: t.named || undefined, term: t.term || undefined, root: ser(t.root) })),
   };
   sb.saveConfig(cfg);
 }, 300);
@@ -402,6 +402,7 @@ async function openTab(section, proj, { claude = false, focus = true, prompt = n
   let command = null;
   if (agent) p.agent = agent;
   const as = agentArg(p);
+  if (agent && !resume) p._newRun = true;
   if (resume) {
     p.claudeSession = resume;
     command = claudeCmd(tab, `${as}--resume ${resume}`);
@@ -416,6 +417,7 @@ async function openTab(section, proj, { claude = false, focus = true, prompt = n
   renderView(tab);
   applyTheme(tab);
   showTab(focus ? tab.id : current[active]);
+  if (p._newRun) { delete p._newRun; if (typeof Deck !== 'undefined') Deck.remember(agent, p.claudeSession); }
   await spawnPane(p, command);
   persist();
   return tab;
@@ -546,6 +548,7 @@ function renderView(tab) {
   view.replaceChildren(tree);
   view.classList.toggle('multi', leaves(tab.root).length > 1);
   if (tree.classList.contains('pane')) tree.style.flex = '1';
+  if (typeof Deck !== 'undefined') Deck.attach(tab, view);
 }
 
 function dragDivider(e, node, box, a, b, d, tab) {
@@ -583,12 +586,13 @@ function showTab(tabId) {
     for (const id of leaves(t.root)) { const p = panes.get(id); if (p) setRenderer(p, on); }
   }
   $('#empty').hidden = !!tab;
+  if (typeof Deck !== 'undefined') Deck.home(active === 'agents' && !tab);
   $('#empty-title').textContent = `${LABEL[active]} is quiet`;
   $('#empty-text').textContent = active === 'agents'
     ? 'Pick an agent on the left to talk to it directly. Any chat in Office or Personal can also call these agents in the middle of its work.'
     : 'Start a task: pick a project, say what you want done, and Claude gets to work. It tells you here when it needs you.';
   if (tab) {
-    requestAnimationFrame(() => { refit(tab); focusPane(tab.focus); });
+    requestAnimationFrame(() => { refit(tab); focusPane(tab.focus); if (typeof Deck !== 'undefined') Deck.focus(tab); });
   }
   renderTabs();
   renderProjects();
@@ -896,7 +900,7 @@ function rosterHtml() {
   const head = (key, title, n) => `<li class="grp ${key} open"><span>${title}</span><span class="n">${n}</span></li>`;
   let html = '';
   if (agentList.length) {
-    html += head('roster', 'Agents', agentList.length) + agentList.map((a) => {
+    html += head('agentlist', 'Agents', agentList.length) + agentList.map((a) => {
       const open = agentTabs(a.name);
       const st = open.length ? sessState(panes.get(open[0].focus)) : 'shell';
       return `<li class="task agent-def ${st}" data-agent="${esc(a.name)}" title="${esc(a.description)}">
@@ -1371,6 +1375,8 @@ function paletteSource() {
   cmd('Split down', ICON.splitd, () => splitPane('col'), '⇧⌘D');
   SECTIONS.forEach((s, i) => { if (s !== active) cmd(`Switch to ${LABEL[s]}`, ICON.swap, () => setSection(s), `⌘${i + 1}`); });
   for (const a of agentList) cmd(`Start agent: ${a.name}`, ICON.spark, () => startAgent(a));
+  const ct = currentTab();
+  if (typeof Deck !== 'undefined' && Deck.isAgentTab(ct)) cmd(Deck.on(ct) ? 'Show terminal for this agent' : 'Show agent view', ICON.prompt, () => Deck.flip(ct, Deck.on(ct)));
   cmd('New project', ICON.folder, () => addProject());
   cmd('Toggle sidebar', ICON.side, () => menuAction('toggle-sidebar'), '⌘B');
   cmd('Settings', ICON.gear, openSettings, '⌘,');
@@ -1723,7 +1729,7 @@ if (IS_WIN) {
   const restored = { live: 0, resumed: 0 };
   for (const st of saved.tabs || []) {
     const ids = leaves(st.root);
-    const tab = { id: st.id, section: st.section, name: st.name, path: st.path, root: stripTree(st.root), focus: st.focus, createdAt: st.createdAt || Date.now(), theme: st.theme || 'night' , named: st.named };
+    const tab = { id: st.id, section: st.section, name: st.name, path: st.path, root: stripTree(st.root), focus: st.focus, createdAt: st.createdAt || Date.now(), theme: st.theme || 'night' , named: st.named, term: st.term };
     const recs = collect(st.root);
     tabs.push(tab);
     for (const id of ids) {
