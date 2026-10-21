@@ -72,6 +72,7 @@ function loadConfig() {
     saveConfig(cfg);
   }
   cfg.ui = { fontSize: 13, fontFamily: "'SF Mono', Menlo, monospace", optionIsMeta: true, notify: true, ...(IS_WIN ? { font: 'cascadia' } : {}), ...cfg.ui };
+  if (!cfg.sections.agents) cfg.sections.agents = { label: 'Agents', projects: [] };
   return cfg;
 }
 function saveConfig(cfg) {
@@ -385,6 +386,7 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Office', accelerator: 'CmdOrCtrl+1', click: send('section', 'office') },
         { label: 'Personal', accelerator: 'CmdOrCtrl+2', click: send('section', 'personal') },
+        { label: 'Agents', accelerator: 'CmdOrCtrl+3', click: send('section', 'agents') },
         { type: 'separator' },
         { label: 'Next Tab', accelerator: 'Ctrl+Tab', click: send('cycle-tab', 1) },
         { label: 'Previous Tab', accelerator: 'Ctrl+Shift+Tab', click: send('cycle-tab', -1) },
@@ -437,6 +439,49 @@ function watchHooks() {
 
 // ---------------------------------------------------------------- IPC
 ipcMain.handle('config:get', () => loadConfig());
+
+// ---------------------------------------------------------------- agents & watchers
+// Agents are Claude Code subagent files (~/.claude/agents/*.md). Bipolar only reads them;
+// starting one opens `claude --agent <name>` in the agent's usual folder.
+const AGENTS_DIR = path.join(HOME, '.claude', 'agents');
+// One-line labels for the sidebar; agents without one show the start of their description.
+const AGENT_TAGS = { 'data-desk': 'Excel jobs, allocations, FINAL_DATA', 'design-critic': 'UI review + design library', 'device-runner': 'Builds on the tablet over adb',
+  inbox: 'Your WhatsApp chats and files', ship: 'Deploy → verify → commit', 'wa-campaign': 'WhatsApp campaigns on Gupshup' };
+const AGENT_DIRS = { 'data-desk': '~/OTR', 'device-runner': '~/Projects/mobile-android', ship: '~/Projects/seqrview', inbox: '~/Inbox/WhatsApp' };
+function frontmatter(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  const out = {};
+  if (m) for (const line of m[1].split(/\r?\n/)) {
+    const kv = /^([\w-]+):\s*(.*)$/.exec(line);
+    if (kv) out[kv[1]] = kv[2].replace(/^["']|["']$/g, '');
+  }
+  return out;
+}
+ipcMain.handle('agents:list', () => {
+  let files = [];
+  try { files = fs.readdirSync(AGENTS_DIR).filter((f) => f.endsWith('.md')); } catch { return []; }
+  const dirs = { ...AGENT_DIRS, ...(loadConfig().agentDirs || {}) };
+  return files.map((f) => {
+    let fm = {};
+    try { fm = frontmatter(fs.readFileSync(path.join(AGENTS_DIR, f), 'utf8')); } catch {}
+    const name = fm.name || f.replace(/\.md$/, '');
+    const dir = dirs[name] && fs.existsSync(expand(dirs[name])) ? dirs[name] : '~';
+    return { name, description: fm.description || '', tag: AGENT_TAGS[name] || '', dir, file: tildify(path.join(AGENTS_DIR, f)) };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+});
+// Background watchers: plain scripts run by launchd, not Claude. Each reports a status file.
+const WATCHERS = [{ id: 'wa-inbox', name: 'WhatsApp inbox', label: 'com.bipolar.wa-inbox',
+  script: path.join(HOME, '.config', 'switchboard', 'agents', 'wa-inbox.py'), status: path.join(HOME, 'Inbox', 'WhatsApp', '.status.json'), folder: '~/Inbox/WhatsApp' }];
+ipcMain.handle('watchers:status', () => Promise.all(WATCHERS.filter((w) => fs.existsSync(w.script)).map((w) => new Promise((res) => {
+  let st = {};
+  try { st = JSON.parse(fs.readFileSync(w.status, 'utf8')); } catch {}
+  execFile('launchctl', ['list', w.label], { timeout: 3000 }, (err) => res({ id: w.id, name: w.name, folder: w.folder, installed: !err, ...st }));
+}))));
+ipcMain.handle('watchers:run', (_e, id) => new Promise((res) => {
+  const w = WATCHERS.find((x) => x.id === id);
+  if (!w) return res({ ok: false });
+  execFile('/usr/bin/python3', [w.script], { timeout: 60000 }, (err, out) => res({ ok: !err, copied: (out || '').split('\n').filter((l) => l.startsWith('copied')).length }));
+}));
 ipcMain.on('config:save', (_e, cfg) => saveConfig(cfg));
 // Light Claude theme for pastel tasks, as a settings file (PowerShell mangles inline JSON).
 const LIGHT_SETTINGS = path.join(CONFIG_DIR, 'claude-light.json');
@@ -611,9 +656,12 @@ ipcMain.handle('dialog:parent', async (_e, current) => {
 ipcMain.handle('menu:popup', (_e, items) => new Promise((resolve) => {
   let done = false;
   const finish = (v) => { if (!done) { done = true; resolve(v); } };
-  const tpl = items.map((it) => (it === '-' ? { type: 'separator' } : {
+  const build = (list) => list.map((it) => (it === '-' ? { type: 'separator' } : it.submenu ? {
+    label: it.label, enabled: it.enabled !== false && it.submenu.length > 0, submenu: build(it.submenu),
+  } : {
     label: it.label, enabled: it.enabled !== false, click: () => finish(it.id),
   }));
+  const tpl = build(items);
   Menu.buildFromTemplate(tpl).popup({ window: win, callback: () => setTimeout(() => finish(null), 50) });
 }));
 ipcMain.on('reveal', (_e, p) => shell.openPath(expand(p)));

@@ -4,8 +4,8 @@
 // `sb` is the bridge exposed by preload.js (window.sb).
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-const SECTIONS = ['office', 'personal'];
-const LABEL = { office: 'Office', personal: 'Personal' };
+const SECTIONS = ['office', 'personal', 'agents'];
+const LABEL = { office: 'Office', personal: 'Personal', agents: 'Agents' };
 
 const ICON = {
   spark: '<svg viewBox="0 0 20 20"><path d="M10 2.5 11.6 8.4 17.5 10l-5.9 1.6L10 17.5l-1.6-5.9L2.5 10l5.9-1.6z"/></svg>',
@@ -37,7 +37,9 @@ let active = 'office';
 let windowFocused = true;
 const tabs = [];            // {id, section, name, path, root, focus}
 const panes = new Map();    // id -> pane
-const current = { office: null, personal: null }; // tab id per section
+const current = { office: null, personal: null, agents: null }; // tab id per section
+let agentList = [];         // ~/.claude/agents, read by main
+let watcherList = [];       // background scripts (launchd), with their last status
 const git = {};             // path -> {branch, dirty, ahead, behind}
 
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
@@ -82,6 +84,7 @@ const persist = debounce(() => {
 function paneRecord(p) {
   if (!p) return {};
   const r = { path: p.path, name: p.name, claudeSession: p.claudeSession || null, wasClaude: !!p.claudeRunning };
+  if (p.agent) r.agent = p.agent;
   if (p.waitPid) Object.assign(r, { prefill: true, waitPid: p.waitPid });
   return r;
 }
@@ -390,19 +393,21 @@ function onProcs(procs) {
 }
 
 // ------------------------------------------------------------------ tabs
-async function openTab(section, proj, { claude = false, focus = true, prompt = null, resume = null, cwd = null, theme = null } = {}) {
+async function openTab(section, proj, { claude = false, focus = true, prompt = null, resume = null, cwd = null, theme = null, agent = null } = {}) {
   const id = await sb.uuid();
   const tab = { id: 't' + id.slice(0, 8), section, name: proj.name, path: proj.path, root: { k: 'pane', id }, focus: id, createdAt: Date.now(),
     theme: theme || ((claude || resume) && cfg.ui.autoPastel !== false ? nextPastel() : 'night') };
   tabs.push(tab);
   const p = makePane({ id, section, name: proj.name, path: cwd || proj.path });
   let command = null;
+  if (agent) p.agent = agent;
+  const as = agentArg(p);
   if (resume) {
     p.claudeSession = resume;
-    command = claudeCmd(tab, `--resume ${resume}`);
-  } else if (claude) {
+    command = claudeCmd(tab, `${as}--resume ${resume}`);
+  } else if (claude || agent) {
     p.claudeSession = await sb.uuid();
-    command = claudeCmd(tab, `--session-id ${p.claudeSession}${prompt ? ' ' + shq(prompt) : ''}`);
+    command = claudeCmd(tab, `${as}--session-id ${p.claudeSession}${prompt ? ' ' + shq(prompt) : ''}`);
   }
   if (focus) {
     if (section !== active) setSection(section, { quiet: true });
@@ -579,6 +584,9 @@ function showTab(tabId) {
   }
   $('#empty').hidden = !!tab;
   $('#empty-title').textContent = `${LABEL[active]} is quiet`;
+  $('#empty-text').textContent = active === 'agents'
+    ? 'Pick an agent on the left to talk to it directly. Any chat in Office or Personal can also call these agents in the middle of its work.'
+    : 'Start a task: pick a project, say what you want done, and Claude gets to work. It tells you here when it needs you.';
   if (tab) {
     requestAnimationFrame(() => { refit(tab); focusPane(tab.focus); });
   }
@@ -682,11 +690,11 @@ function editInline(el, value, save, { onDone } = {}) {
 }
 
 async function tabMenu(t) {
-  const other = t.section === 'office' ? 'personal' : 'office';
+  const others = SECTIONS.filter((s) => s !== t.section);
   const r = await sb.popup([
     { id: 'rename', label: 'Rename' },
     { id: 'colour', label: 'Colour & Font…' },
-    { id: 'move', label: `Move to ${LABEL[other]}` },
+    ...others.map((s) => ({ id: 'move:' + s, label: `Move to ${LABEL[s]}` })),
     '-',
     { id: 'reveal', label: IS_WIN ? 'Show in Explorer' : 'Reveal in Finder' },
     { id: 'code', label: 'Open in VS Code' },
@@ -695,7 +703,8 @@ async function tabMenu(t) {
   ]);
   if (r === 'colour') { showTab(t.id); openThemes(); }
   else if (r === 'rename') renameTab(t);
-  else if (r === 'move') {
+  else if (r && r.startsWith('move:')) {
+    const other = r.slice(5);
     t.section = other;
     for (const id of leaves(t.root)) panes.get(id).section = other;
     if (current[active] === t.id) current[active] = null;
@@ -779,6 +788,7 @@ function setSection(s, { quiet = false } = {}) {
     ul.classList.remove('stagger'); void ul.offsetWidth; ul.classList.add('stagger');
   }
   renderProjects();
+  if (s === 'agents' && changed) refreshAgents();
   if (!quiet) showTab(current[s] || tabs.find((t) => t.section === s)?.id);
   refreshGit();
   persist();
@@ -865,17 +875,82 @@ function renderSidebar() {
     return `<li class="grp ${key} ${opts.foldable ? 'fold' : ''} ${folded ? '' : 'open'}" data-fold="${opts.foldable ? key : ''}">${opts.foldable ? ICON_CHEV : ''}<span>${title}</span><span class="n">${list.length}</span></li>`
       + (folded ? '' : list.map((t) => (opts.archive ? archRow(t) : taskRow(t, { showSection: opts.showSection && t.section !== active }))).join(''));
   };
-  let html = group('needs', 'Needs you', needs, { showSection: true })
+  const roster = active === 'agents' ? rosterHtml() : '';
+  let html = roster + group('needs', 'Needs you', needs, { showSection: true })
     + group('working', 'Working', working)
     + group('ready', 'Ready', ready)
     + group('shells', 'Shells', shells, { foldable: true })
     + group('archive', 'Archive', archived, { foldable: true, archive: true });
-  if (!mine.length && !needs.length) html = `<li class="hint-row">No tasks in ${LABEL[active]} yet. Start one with ${keyLabel('⌘N')}.</li>` + html;
+  if (!mine.length && !needs.length && !roster) html = `<li class="hint-row">No tasks in ${LABEL[active]} yet. Start one with ${keyLabel('⌘N')}.</li>` + html;
   if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
   for (const s of SECTIONS) {
     $(`#seg button[data-section="${s}"]`).classList.toggle('alert', s !== active && needs.some((t) => t.section === s));
   }
 }
+// ------------------------------------------------------------------ sidebar: agents & watchers
+// The Agents section lists the subagents in ~/.claude/agents (click to talk to one directly;
+// every other chat can still call them inline) and the background watchers with their status.
+const firstSentence = (d) => { const m = /^(.{0,90}?[.;—])\s/.exec(d + ' '); return (m ? m[1] : d.slice(0, 90)).replace(/[.;—]$/, ''); };
+function agentTabs(name) { return tabs.filter((t) => leaves(t.root).some((id) => panes.get(id)?.agent === name)); }
+function rosterHtml() {
+  const head = (key, title, n) => `<li class="grp ${key} open"><span>${title}</span><span class="n">${n}</span></li>`;
+  let html = '';
+  if (agentList.length) {
+    html += head('roster', 'Agents', agentList.length) + agentList.map((a) => {
+      const open = agentTabs(a.name);
+      const st = open.length ? sessState(panes.get(open[0].focus)) : 'shell';
+      return `<li class="task agent-def ${st}" data-agent="${esc(a.name)}" title="${esc(a.description)}">
+        <i class="st ${open.length ? st : 'idle'}"></i>
+        <div class="t-main"><div class="t-top"><span class="t-name">${esc(a.name)}</span>${open.length ? `<time>${open.length} open</time>` : ''}</div>
+        <div class="t-sub"><span class="tag">${esc(a.dir === '~' ? 'home' : a.dir.split('/').pop())}</span><span class="t-line">${esc(a.tag || firstSentence(a.description))}</span></div></div></li>`;
+    }).join('');
+  } else html += `<li class="hint-row">No agents yet. Agent files go in ~/.claude/agents.</li>`;
+  if (watcherList.length) {
+    html += head('watchers', 'Watchers', watcherList.length) + watcherList.map((w) => {
+      const st = !w.installed ? 'off' : w.ok === false ? 'err' : 'ok';
+      const line = !w.installed ? 'not switched on · click to run once'
+        : w.ok === false ? (w.error || 'last run failed')
+        : w.last_file ? `last: ${w.last_file}${w.last_copied ? ` · ${ago(Date.parse(w.last_copied))}` : ''}` : 'watching · nothing new yet';
+      return `<li class="task watcher ${st}" data-watch="${esc(w.id)}" title="Click to check now · right-click to open ${esc(w.folder)}">
+        <i class="st ${st === 'ok' ? 'idle' : st === 'err' ? 'waiting' : 'shell'}"></i>
+        <div class="t-main"><div class="t-top"><span class="t-name">${esc(w.name)}</span>${w.total ? `<time>${w.total} files</time>` : ''}</div>
+        <div class="t-sub"><span class="t-line">${esc(line)}</span></div></div></li>`;
+    }).join('');
+  }
+  return html;
+}
+async function refreshAgents() {
+  try { [agentList, watcherList] = await Promise.all([sb.agents(), sb.watchers()]); } catch { return; }
+  if (active === 'agents') renderSidebar();
+}
+function startAgent(a, dir = null) {
+  const open = agentTabs(a.name);
+  if (open.length && !dir) {
+    if (active !== 'agents') setSection('agents', { quiet: true });
+    return showTab(open[0].id);
+  }
+  return openTab('agents', { name: a.name, path: dir || a.dir }, { agent: a.name });
+}
+async function agentMenu(a) {
+  const projs = [];
+  for (const s of ['office', 'personal']) for (const pr of cfg.sections[s].projects) if (!projs.some((x) => x.path === pr.path)) projs.push(pr);
+  const r = await sb.popup([
+    { id: 'new', label: 'New session' },
+    { id: 'pick', label: 'New session in project', submenu: projs.map((pr, i) => ({ id: 'p' + i, label: pr.name })) },
+    '-',
+    { id: 'edit', label: 'Edit agent file' },
+  ]);
+  if (r === 'new') openTab('agents', { name: a.name, path: a.dir }, { agent: a.name });
+  else if (r === 'edit') sb.openEditor(a.file);
+  else if (r && /^p\d+$/.test(r)) startAgent(a, projs[+r.slice(1)].path);
+}
+async function runWatcherNow(id) {
+  toast('Checking WhatsApp for new files…');
+  const r = await sb.runWatcher(id);
+  toast(r.ok ? (r.copied ? `${r.copied} new file${r.copied > 1 ? 's' : ''} saved to ~/Inbox/WhatsApp` : 'Nothing new on WhatsApp') : 'Watcher could not run — see ~/Inbox/WhatsApp/.status.json');
+  refreshAgents();
+}
+
 function archRow(a) {
   return `<li class="task archived" data-arch="${esc(a.id)}" title="Click to resume this conversation">
     <i class="st idle"></i>
@@ -891,6 +966,10 @@ $('#tree').addEventListener('click', (e) => {
   if (fold) { cfg.ui.fold = { ...(cfg.ui.fold || {}), [fold]: !(cfg.ui.fold || {})[fold] }; persist(); return renderSidebar(); }
   const arch = e.target.closest('[data-arch]');
   if (arch) return act === 'forget' ? forgetArchived(arch.dataset.arch) : resumeArchived(arch.dataset.arch);
+  const ag = agentList.find((a) => a.name === e.target.closest('[data-agent]')?.dataset.agent);
+  if (ag) return startAgent(ag);
+  const wid = e.target.closest('[data-watch]')?.dataset.watch;
+  if (wid) return runWatcherNow(wid);
   const row = e.target.closest('[data-tab]');
   if (!row) return;
   if (act === 'close') return requestCloseTab(row.dataset.tab);
@@ -905,6 +984,10 @@ $('#tree').addEventListener('dblclick', (e) => {
 });
 $('#crumb').addEventListener('dblclick', () => { const t = currentTab(); if (t) renameTab(t, { inHeader: true }); });
 $('#tree').addEventListener('contextmenu', (e) => {
+  const ag = agentList.find((a) => a.name === e.target.closest('[data-agent]')?.dataset.agent);
+  if (ag) { e.preventDefault(); return agentMenu(ag); }
+  const w = watcherList.find((x) => x.id === e.target.closest('[data-watch]')?.dataset.watch);
+  if (w) { e.preventDefault(); return sb.reveal(w.folder); }
   const row = e.target.closest('[data-tab]');
   if (!row) return;
   e.preventDefault();
@@ -924,6 +1007,7 @@ function nextPastel() {
   const pool = free.length ? free : THEMES.PASTELS;
   return pool[Math.floor(Math.random() * pool.length)];
 }
+const agentArg = (p) => (p?.agent ? `--agent ${shq(p.agent)} ` : '');
 // Pastel paper needs Claude's light theme so its own greys stay readable.
 function claudeCmd(tab, args) {
   const light = THEMES.get(tab?.theme).light;
@@ -1285,7 +1369,8 @@ function paletteSource() {
   cmd('New shell here', ICON.prompt, () => menuAction('new-tab'), '⌘T');
   cmd('Split right', ICON.split, () => splitPane('row'), '⌘D');
   cmd('Split down', ICON.splitd, () => splitPane('col'), '⇧⌘D');
-  cmd(`Switch to ${LABEL[active === 'office' ? 'personal' : 'office']}`, ICON.swap, () => setSection(active === 'office' ? 'personal' : 'office'), active === 'office' ? '⌘2' : '⌘1');
+  SECTIONS.forEach((s, i) => { if (s !== active) cmd(`Switch to ${LABEL[s]}`, ICON.swap, () => setSection(s), `⌘${i + 1}`); });
+  for (const a of agentList) cmd(`Start agent: ${a.name}`, ICON.spark, () => startAgent(a));
   cmd('New project', ICON.folder, () => addProject());
   cmd('Toggle sidebar', ICON.side, () => menuAction('toggle-sidebar'), '⌘B');
   cmd('Settings', ICON.gear, openSettings, '⌘,');
@@ -1645,6 +1730,7 @@ if (IS_WIN) {
       const rec = recs[id] || {};
       const p = makePane({ id, section: st.section, name: rec.name || st.name, path: rec.path || st.path });
       p.claudeSession = rec.claudeSession || null;
+      if (rec.agent) p.agent = rec.agent;
       if (rec.waitPid) p.waitPid = rec.waitPid;
       p._restore = alive.has(id) ? 'attach'
         : rec.prefill && rec.claudeSession ? 'prefill'
@@ -1664,8 +1750,9 @@ if (IS_WIN) {
     renderView(tab);
   }
 
-  current.office = saved.current?.office && tabs.some((t) => t.id === saved.current.office) ? saved.current.office : tabs.find((t) => t.section === 'office')?.id || null;
-  current.personal = saved.current?.personal && tabs.some((t) => t.id === saved.current.personal) ? saved.current.personal : tabs.find((t) => t.section === 'personal')?.id || null;
+  for (const s of SECTIONS) {
+    current[s] = saved.current?.[s] && tabs.some((t) => t.id === saved.current[s]) ? saved.current[s] : tabs.find((t) => t.section === s)?.id || null;
+  }
 
   // Make views measurable so restored shells get the right size.
   showTab(current[active]);
@@ -1676,12 +1763,12 @@ if (IS_WIN) {
     if (p._restore === 'attach') { await attachPane(p); restored.live++; }
     else if (p._restore === 'resume') {
       const tb = tabOf(p.id);
-      await spawnPane(p, orElse(claudeCmd(tb, `--resume ${p.claudeSession}`), claudeCmd(tb, `--session-id ${p.claudeSession}`)));
+      await spawnPane(p, orElse(claudeCmd(tb, `${agentArg(p)}--resume ${p.claudeSession}`), claudeCmd(tb, `${agentArg(p)}--session-id ${p.claudeSession}`)));
       restored.resumed++;
     } else if (p._restore === 'prefill') {
       // Typed but not run: the conversation is still open elsewhere; press Enter once it's closed there.
       await spawnPane(p, null);
-      typeWhenReady(p, claudeCmd(tabOf(p.id), `--resume ${p.claudeSession}`));
+      typeWhenReady(p, claudeCmd(tabOf(p.id), `${agentArg(p)}--resume ${p.claudeSession}`));
     } else await spawnPane(p, null);
     delete p._restore;
   }
@@ -1698,6 +1785,7 @@ if (IS_WIN) {
   refreshChanges(); setInterval(refreshChanges, 15000);
   setInterval(() => { $('#tree').dataset.html = ''; renderSidebar(); renderCrumb(); }, 30000);
   setInterval(() => renderAttention(), 30000);
+  refreshAgents(); setInterval(refreshAgents, 20000);
   const portalStats = () => {
     const live = panes.size, claude = [...panes.values()].filter((p) => p.claudeRunning).length;
     const waiting = attentionList().length;

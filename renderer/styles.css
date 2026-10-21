@@ -60,6 +60,7 @@ body {
   transition: --a1 var(--t-slow) var(--ease), --a2 var(--t-slow) var(--ease);
 }
 body[data-section='personal'] { --a1: #8f4bff; --a2: #f0428d; }
+body[data-section='agents'] { --a1: #1fbf8f; --a2: #22a6c9; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }

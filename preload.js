@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('sb', {
   registerHooks: () => ipcRenderer.invoke('hooks:register'),
   hello: () => ipcRenderer.invoke('daemon:hello'),
   uuid: () => ipcRenderer.invoke('uuid'),
+  agents: () => ipcRenderer.invoke('agents:list'),
+  watchers: () => ipcRenderer.invoke('watchers:status'),
+  runWatcher: (id) => ipcRenderer.invoke('watchers:run', id),
 
   spawn: (opts) => ipcRenderer.invoke('pty:spawn', opts),
   snapshot: (id) => ipcRenderer.invoke('pty:snapshot', id),

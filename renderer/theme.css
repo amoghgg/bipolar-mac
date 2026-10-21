@@ -56,6 +56,7 @@
 }
 body { --a1: #93e4f6; --a2: #c6b6ff; background: var(--void); }
 body[data-section='personal'] { --a1: #ffbaa5; --a2: #f6a8d9; }
+body[data-section='agents'] { --a1: #aaf0ce; --a2: #93e4f6; }
 body { --accent-soft: color-mix(in srgb, var(--a1) 12%, transparent); }
 
 /* film grain over everything, very quiet */
