@@ -868,6 +868,13 @@ function taskRow(t, { showSection = false } = {}) {
     <button class="x" data-act="close" title="Close">${ICON.x}</button></li>`;
 }
 
+// Type a message into a Claude pane and send it. Enter goes separately: sent in the same write,
+// Claude takes it as part of a paste and inserts a newline instead of submitting.
+function sendToClaude(id, text) {
+  sb.write(id, text.replace(/\r?\n/g, ' '));
+  setTimeout(() => sb.write(id, '\r'), 250);
+}
+
 // ------------------------------------------------------------------ context size & fresh start
 function ctxOf(t) { const p = t && panes.get(t.focus); return p?.claudeRunning && p.claudeSession ? ctxSizes[p.claudeSession]?.ctx || 0 : 0; }
 const ctxLevel = (n) => (n >= CTX_HIGH ? 'high' : n >= CTX_WARN ? 'warn' : 'ok');
@@ -893,20 +900,25 @@ async function freshStart(t) {
   const slug = (sessLabel(t) || 'session').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session';
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
   const note = `~/.claude/handoffs/${slug}-${stamp}.md`;
-  sb.write(p.id, `Please write a handoff note so this work can continue in a fresh session with a small context. Save it to ${note} (create the folder if needed). Include: the goal, what is done, the current state, decisions and rules we agreed, key files, paths and commands, open questions, and the exact next step. Under 500 words, plain markdown. When it is saved, reply only: HANDOFF READY\r`);
+  sendToClaude(p.id, `Please write a handoff note so this work can continue in a fresh session with a small context. Save it to ${note} (create the folder if needed). Include: the goal, what is done, the current state, decisions and rules we agreed, key files, paths and commands, open questions, and the exact next step. Under 500 words, plain markdown. When it is saved, reply only: HANDOFF READY`);
   toast('Writing the handoff note…');
   const started = Date.now();
+  const prevLog = (await sb.agentFeed(p.claudeSession)).transcript || `the Claude session ${p.claudeSession}`;
   const wait = async () => {
     if (!panes.has(p.id)) return;
-    const ready = (await sb.exists(note)) && p.state !== 'working';
+    let ready = false;
+    if (p.state !== 'working' && (await sb.exists(note))) {
+      const f = await sb.agentFeed(p.claudeSession);
+      ready = !!(f.found && f.textAt > started - 5000 && /HANDOFF READY/.test(f.lastText || ''));
+    }
     if (!ready) { if (Date.now() - started < 10 * 60000) setTimeout(wait, 2000); else toast('No handoff note yet — check the session.'); return; }
     const tab = await openTab(t.section, { name: t.name, path: t.path }, { claude: true, agent: p.agent || null, cwd: p.path,
-      prompt: `Continue from the handoff note at ${note}. Read it first, then carry on with the next step, or ask me if anything is unclear.` });
+      prompt: `Continue from the handoff note at ${note}. Read it first, then carry on with the next step, or ask me if anything is unclear. If you need a detail the note doesn't cover, the full previous conversation is saved at ${prevLog} — search it with grep for that detail; don't read the whole file.` });
     tab.name = sessLabel(t); tab.named = true;
     const old = tabs.find((x) => x.id === t.id);
     if (old) {
       cfg.archive = cfg.archive || [];
-      cfg.archive.unshift({ id: old.id, name: sessLabel(old) + ' (before fresh start)', section: old.section, path: old.path, cwd: p.path, project: projectOf(old), claudeSession: p.claudeSession, theme: old.theme, archivedAt: Date.now() });
+      cfg.archive.unshift({ id: old.id, name: sessLabel(old) + ' (before fresh start)', section: old.section, path: old.path, cwd: p.path, project: projectOf(old), claudeSession: p.claudeSession, agent: p.agent || undefined, theme: old.theme, archivedAt: Date.now() });
       closeTab(old.id);
     }
     persist(); renderSidebar();
@@ -1138,7 +1150,7 @@ async function archiveTask(t) {
   }
   cfg.archive = cfg.archive || [];
   if (p?.claudeSession || p?.claudeRunning) {
-    cfg.archive.unshift({ id: t.id, name: sessLabel(t), section: t.section, path: t.path, cwd: p?.path || t.path, project: projectOf(t), claudeSession: p?.claudeSession || null, theme: t.theme, archivedAt: Date.now() });
+    cfg.archive.unshift({ id: t.id, name: sessLabel(t), section: t.section, path: t.path, cwd: p?.path || t.path, project: projectOf(t), claudeSession: p?.claudeSession || null, agent: p?.agent || undefined, theme: t.theme, archivedAt: Date.now() });
     cfg.archive = cfg.archive.slice(0, 60);
   }
   closeTab(t.id);
@@ -1149,7 +1161,7 @@ async function resumeArchived(id) {
   if (i < 0) return;
   const a = cfg.archive[i];
   cfg.archive.splice(i, 1);
-  const tab = await openTab(a.section, { name: a.name, path: a.path }, { cwd: a.cwd, resume: a.claudeSession, theme: a.theme });
+  const tab = await openTab(a.section, { name: a.name, path: a.path }, { cwd: a.cwd, resume: a.claudeSession, theme: a.theme, agent: a.agent || null });
   tab.name = a.name;
   persist();
 }

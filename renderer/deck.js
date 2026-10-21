@@ -135,7 +135,7 @@ const Deck = (() => {
     const send = () => {
       const p = agentPane(tab); const v = ta.value.trim();
       if (!p || !v) return;
-      sb.write(p.id, v.replace(/\n/g, ' ') + '\r');
+      sendToClaude(p.id, v);
       ta.value = ''; ta.style.height = '';
       toast(`Sent to ${p.agent}`);
     };
