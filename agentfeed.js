@@ -73,6 +73,12 @@ function ingest(st, d) {
         if (!s) continue;
         s.status = r.is_error ? 'error' : 'done';
         s.endedAt = ts;
+        if (!r.is_error && s.kind === 'run') {
+          for (const m of textOf(r.content).matchAll(/^(?:board|saved|wrote|written|created|output|exported|copied)\b[^\n]*?((?:~|\/Users\/[^/\s]+)\/[^\s`'"()<>|*]+)/gim)) {
+            const p = m[1].replace(/[.,;:]+$/, '');
+            if (OUTPUT_EXT.test(p)) st.files.set(p.startsWith('~') ? path.join(HOME, p.slice(1)) : p, ts);
+          }
+        }
         if (r.is_error) { st.counts.errors++; s.note = clip(textOf(r.content), 160); }
       }
     } else {
@@ -146,7 +152,7 @@ function feed(session) {
   const st = read(session);
   if (!st) return { found: false };
   const files = [...st.files.entries()]
-    .map(([p, at]) => { let s = null; try { s = fs.statSync(p); } catch {} return s && s.isFile() ? { path: home(p), name: base(p), ext: path.extname(p).slice(1).toLowerCase(), bytes: s.size, at: Math.max(at, s.mtimeMs) } : null; })
+    .map(([p, at]) => { let s = null; try { s = fs.statSync(p); } catch {} return s && s.isFile() ? { path: home(p), abs: p, name: /\/DesignReviews\//.test(p) && base(p) === 'index.html' ? 'Review board · ' + base(path.dirname(path.dirname(p))) : base(p), board: /\/DesignReviews\/.+\/index\.html$/.test(p), ext: path.extname(p).slice(1).toLowerCase(), bytes: s.size, at: Math.max(at, s.mtimeMs) } : null; })
     .filter(Boolean).sort((a, b) => b.at - a.at).slice(0, 24);
   return {
     found: true, transcript: home(st.file), task: st.task, startedAt: st.startedAt, updatedAt: st.updatedAt,

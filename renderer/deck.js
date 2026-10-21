@@ -28,6 +28,9 @@ const Deck = (() => {
     send: '<svg viewBox="0 0 16 16"><path d="M3 8h9 M8.5 4.5L12 8l-3.5 3.5"/></svg>',
     stop: '<svg viewBox="0 0 16 16"><rect x="4.5" y="4.5" width="7" height="7" rx="1.2"/></svg>',
   };
+  const IMG = /^(png|jpe?g|webp|gif|svg)$/i, HTML = /^html?$/i;
+  const visual = (x) => IMG.test(x.ext) || HTML.test(x.ext);
+  const fileUrl = (x) => 'file://' + encodeURI(x.abs || '') + '?v=' + Math.round(x.at || 0);
   const fmtBytes = (n) => (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n > 1024 ? Math.round(n / 1024) + ' KB' : n + ' B');
   const clock = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m ${String(s % 60).padStart(2, '0')}s`; };
   const since = (ts) => (ts ? ago(ts) : '');
@@ -111,6 +114,7 @@ const Deck = (() => {
       <div class="deck-body">
         <div class="deck-thread"><div class="deck-label">thread</div><ol class="thread"></ol></div>
         <div class="deck-side">
+          <div class="deck-board"></div>
           <div class="deck-now"></div>
           <div class="deck-todos"></div>
           <div class="deck-files"></div>
@@ -120,7 +124,13 @@ const Deck = (() => {
         <div class="cmd-box"><span class="cmd-at"></span><textarea rows="1" spellcheck="false"></textarea>
         <button class="cmd-stop" title="Interrupt (esc)">${G.stop}</button><button class="cmd-send" title="Send (↵)">${G.send}</button></div>
         <div class="cmd-hint"></div>
-      </footer>`;
+      </footer>
+      <div class="deck-viewer" hidden>
+        <header><div class="v-title"><b></b><span></span></div>
+          <div class="v-acts"><button data-v="prev" title="Previous (←)">‹</button><button data-v="next" title="Next (→)">›</button>
+          <button data-v="browser">open in browser</button><button data-v="finder">show in Finder</button><button data-v="close" title="Close (esc)">close</button></div></header>
+        <div class="v-stage"></div>
+      </div>`;
     const ta = $('textarea', el);
     const send = () => {
       const p = agentPane(tab); const v = ta.value.trim();
@@ -139,8 +149,15 @@ const Deck = (() => {
     $('.cmd-stop', el).addEventListener('click', () => { const p = agentPane(tab); if (p) sb.write(p.id, '\x1b'); });
     $('.deck-flip', el).addEventListener('click', () => flip(tab, true));
     el.addEventListener('click', (e) => {
+      const v = e.target.closest('[data-v]')?.dataset.v;
+      if (v) return viewerAct(tab, v);
       const f = e.target.closest('[data-file]');
-      if (f) return e.altKey || e.target.closest('.show') ? sb.showFile(f.dataset.file) : sb.openFile(f.dataset.file);
+      if (f) {
+        if (e.altKey || e.target.closest('.show')) return sb.showFile(f.dataset.file);
+        const d = decks.get(tab.id); const x = d?.feed?.files.find((y) => y.path === f.dataset.file);
+        if (x && visual(x) && !e.target.closest('.ext-open')) return openViewer(tab, x.path);
+        return sb.openFile(f.dataset.file);
+      }
       const o = e.target.closest('[data-opt]');
       if (o) { const p = agentPane(tab); const q = question(p); if (q) answer(p, q, +o.dataset.opt); return; }
       if (e.target.closest('[data-esc]')) { const p = agentPane(tab); if (p) sb.write(p.id, '\x1b'); }
@@ -238,11 +255,24 @@ const Deck = (() => {
       <div class="bar"><i style="width:${(doneN / todos.length) * 100}%"></i></div>
       <ul>${todos.map((t) => `<li class="${t.status}">${esc(t.text)}</li>`).join('')}</ul>` : '');
 
+    // the latest review board, live
+    const board = f.files.find((x) => x.board);
+    set(d, '.deck-board', board ? `<div class="deck-label">review board <time>${new Date(board.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
+      <button class="board-card" data-file="${esc(board.path)}" title="Open the review board">
+        <span class="board-frame"><iframe src="${esc(fileUrl(board))}" sandbox="allow-scripts" tabindex="-1" loading="lazy"></iframe></span>
+        <span class="board-cta">open board ${G.open}</span></button>` : '');
+    if (board) {
+      d.seenBoards = d.seenBoards || new Set();
+      if (!d.boardsPrimed) { d.boardsPrimed = true; f.files.filter((x) => x.board).forEach((x) => d.seenBoards.add(x.path + x.at)); }
+      else if (!d.seenBoards.has(board.path + board.at)) { d.seenBoards.add(board.path + board.at); if (currentTab() === tab && st !== 'working') openViewer(tab, board.path); }
+    }
+
     // files
     set(d, '.deck-files', f.files.length ? `<div class="deck-label">made <span>${f.files.length}</span></div><div class="tiles">${f.files.slice(0, 12).map((x) => `
-      <button class="tile" data-file="${esc(x.path)}" title="${esc(x.path)} — click to open, ⌥-click to show in Finder">
-        <span class="ext ${esc(x.ext)}">${esc(x.ext || 'file')}</span><span class="fname">${esc(x.name)}</span>
-        <span class="fmeta">${fmtBytes(x.bytes)} · ${since(x.at)}</span><span class="show" title="Show in Finder">${G.open}</span></button>`).join('')}</div>` : '');
+      <button class="tile ${IMG.test(x.ext) ? 'has-thumb' : ''}" data-file="${esc(x.path)}" title="${esc(x.path)} — click to ${visual(x) ? 'preview' : 'open'}, ⌥-click to show in Finder">
+        ${IMG.test(x.ext) ? `<span class="thumb"><img src="${esc(fileUrl(x))}" loading="lazy" alt=""></span>` : ''}
+        <span class="ext ${esc(x.ext)}">${esc(x.board ? 'board' : x.ext || 'file')}</span><span class="fname">${esc(x.name)}</span>
+        <span class="fmeta">${fmtBytes(x.bytes)} · ${since(x.at)}${visual(x) ? ' · preview' : ''}</span><span class="show" title="Show in Finder">${G.open}</span></button>`).join('')}</div>` : '');
 
     // command bar
     set(d, '.cmd-at', `@${esc(p.agent)}`);
@@ -250,6 +280,43 @@ const Deck = (() => {
     set(d, '.cmd-hint', st === 'working' ? '↵ send · esc interrupts' : '↵ send · ⇧↵ new line');
     d.el.classList.toggle('working', st === 'working' && !q);
   }
+
+  // ------------------------------------------------------------ the viewer
+  function openViewer(tab, filePath) {
+    const d = decks.get(tab.id);
+    if (!d?.feed) return;
+    d.vList = d.feed.files.filter(visual);
+    d.vIdx = Math.max(0, d.vList.findIndex((x) => x.path === filePath));
+    showViewer(d);
+  }
+  function showViewer(d) {
+    const x = d.vList[d.vIdx];
+    const v = $('.deck-viewer', d.el);
+    if (!x) { v.hidden = true; return; }
+    $('.v-title b', v).textContent = x.name;
+    $('.v-title span', v).textContent = `${x.path} · ${d.vIdx + 1} of ${d.vList.length}`;
+    $('.v-stage', v).innerHTML = IMG.test(x.ext)
+      ? `<img src="${esc(fileUrl(x))}" alt="">`
+      : `<iframe src="${esc(fileUrl(x))}" sandbox="allow-scripts allow-popups"></iframe>`;
+    v.hidden = false;
+    d.el.classList.add('viewing');
+  }
+  function viewerAct(tab, act) {
+    const d = decks.get(tab.id);
+    if (!d?.vList) return;
+    const x = d.vList[d.vIdx];
+    if (act === 'close') { $('.deck-viewer', d.el).hidden = true; $('.v-stage', d.el).innerHTML = ''; d.el.classList.remove('viewing'); focus(tab); }
+    else if (act === 'prev' || act === 'next') { d.vIdx = (d.vIdx + (act === 'next' ? 1 : -1) + d.vList.length) % d.vList.length; showViewer(d); }
+    else if (act === 'browser' && x) sb.openFile(x.path);
+    else if (act === 'finder' && x) sb.showFile(x.path);
+  }
+  document.addEventListener('keydown', (e) => {
+    const tab = currentTab();
+    const d = tab && decks.get(tab.id);
+    if (!d || !d.el.classList.contains('viewing')) return;
+    const act = { Escape: 'close', ArrowLeft: 'prev', ArrowRight: 'next' }[e.key];
+    if (act) { e.preventDefault(); e.stopPropagation(); viewerAct(tab, act); }
+  }, true);
 
   async function poll() {
     const tab = currentTab();
