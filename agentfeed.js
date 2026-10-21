@@ -90,6 +90,8 @@ function ingest(st, d) {
       }
     }
   } else if (d.type === 'assistant' && Array.isArray(content)) {
+    const u = d.message?.usage;
+    if (u) { st.ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0); st.ctxAt = ts; st.model = d.message.model || st.model; }
     for (const it of content) {
       if (it.type === 'text' && it.text?.trim()) { st.lastText = it.text.trim(); st.textAt = ts; }
       if (it.type !== 'tool_use') continue;
@@ -167,4 +169,10 @@ function summary(session) {
   return f.found ? { task: f.task, startedAt: f.startedAt, updatedAt: f.updatedAt, files: f.files.slice(0, 3), counts: f.counts, lastText: clip(f.lastText, 180) } : null;
 }
 
-module.exports = { feed, summary };
+// How big a session's context is right now (what every next step re-reads).
+function context(session) {
+  const st = read(session);
+  return st && st.ctx ? { ctx: st.ctx, at: st.ctxAt, model: st.model } : null;
+}
+
+module.exports = { feed, summary, context };

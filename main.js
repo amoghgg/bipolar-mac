@@ -485,6 +485,12 @@ ipcMain.handle('agent:summaries', (_e, sessions) => {
   for (const [name, session] of Object.entries(sessions || {})) { try { out[name] = agentFeed.summary(session); } catch {} }
   return out;
 });
+ipcMain.handle('claude:context', (_e, sessions) => {
+  const out = {};
+  for (const id of sessions || []) { try { const c = agentFeed.context(id); if (c) out[id] = c; } catch {} }
+  return out;
+});
+ipcMain.handle('fs:exists', (_e, p) => fs.existsSync(expand(p)));
 ipcMain.on('file:open', (_e, p) => shell.openPath(expand(p)));
 ipcMain.on('file:show', (_e, p) => shell.showItemInFolder(expand(p)));
 // Background watchers: plain scripts run by launchd, not Claude. Each reports a status file.

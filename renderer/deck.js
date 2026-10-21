@@ -219,7 +219,7 @@ const Deck = (() => {
     set(d, '.deck-task', esc(f.task || (st === 'shell' ? 'Session ended' : 'Ready when you are')));
     const label = { working: 'working', waiting: 'needs you', idle: 'ready', done: 'finished', shell: 'stopped', moving: 'moving in' }[q ? 'waiting' : st] || st;
     const elapsed = f.startedAt ? clock((st === 'working' ? Date.now() : f.updatedAt || Date.now()) - f.startedAt) : '';
-    set(d, '.deck-meta', `<span class="m-state">${label}</span>${elapsed ? `<span><b>${elapsed}</b></span>` : ''}<span><b>${f.counts.steps || 0}</b> steps</span><span><b>${f.files.length}</b> files</span>${f.counts.errors ? `<span class="m-err"><b>${f.counts.errors}</b> retried</span>` : ''}`);
+    set(d, '.deck-meta', `<span class="m-state">${label}</span>${elapsed ? `<span><b>${elapsed}</b></span>` : ''}${typeof ctxOf === 'function' && ctxOf(tab) ? `<span class="m-ctx ${ctxLevel(ctxOf(tab))}" title="Context re-read on every step"><b>${ctxLabel(ctxOf(tab))}</b> context</span>` : ''}<span><b>${f.counts.steps || 0}</b> steps</span><span><b>${f.files.length}</b> files</span>${f.counts.errors ? `<span class="m-err"><b>${f.counts.errors}</b> retried</span>` : ''}`);
 
     // thread
     const steps = f.steps.slice(-40);

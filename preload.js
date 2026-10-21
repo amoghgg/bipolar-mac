@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('sb', {
   runWatcher: (id) => ipcRenderer.invoke('watchers:run', id),
   agentFeed: (session) => ipcRenderer.invoke('agent:feed', session),
   agentSummaries: (map) => ipcRenderer.invoke('agent:summaries', map),
+  contextSizes: (ids) => ipcRenderer.invoke('claude:context', ids),
+  exists: (p) => ipcRenderer.invoke('fs:exists', p),
   openFile: (p) => ipcRenderer.send('file:open', p),
   showFile: (p) => ipcRenderer.send('file:show', p),
 

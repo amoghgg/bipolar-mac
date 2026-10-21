@@ -39,6 +39,8 @@ const tabs = [];            // {id, section, name, path, root, focus}
 const panes = new Map();    // id -> pane
 const current = { office: null, personal: null, agents: null }; // tab id per section
 let agentList = [];         // ~/.claude/agents, read by main
+const ctxSizes = {};        // claude session -> {ctx, at, model}: what each next step re-reads
+const CTX_WARN = 150000, CTX_HIGH = 300000;
 let watcherList = [];       // background scripts (launchd), with their last status
 const git = {};             // path -> {branch, dirty, ahead, behind}
 
@@ -649,7 +651,10 @@ function renderCrumb() {
   $('#crumb-glyph').innerHTML = t ? `<i class="st ${sessState(p)}"></i>` : '';
   $('#crumb-title').textContent = t ? sessLabel(t) : '';
   const sub = $('#crumb-sub');
-  sub.textContent = t ? `${projectOf(t)} · ${taskLine(t)}` : '';
+  const cx = ctxOf(t);
+  sub.textContent = t ? `${projectOf(t)} · ${taskLine(t)}${cx ? ` · ${ctxLabel(cx)} context` : ''}` : '';
+  const fb = $('#fresh-btn');
+  if (fb) { fb.hidden = !(cx >= CTX_WARN); fb.classList.toggle('high', cx >= CTX_HIGH); fb.title = `This session re-reads ${ctxLabel(cx)} tokens on every step. Write a handoff note and continue in a fresh session.`; }
   sub.className = p && p.claudeRunning ? p.state : '';
   $('#tabbar .tab-actions').style.visibility = t ? 'visible' : 'hidden';
 }
@@ -698,6 +703,7 @@ async function tabMenu(t) {
   const r = await sb.popup([
     { id: 'rename', label: 'Rename' },
     { id: 'colour', label: 'Colour & Font…' },
+    { id: 'fresh', label: 'Fresh Start (handoff note)…', enabled: !!panes.get(t.focus)?.claudeRunning },
     ...others.map((s) => ({ id: 'move:' + s, label: `Move to ${LABEL[s]}` })),
     '-',
     { id: 'reveal', label: IS_WIN ? 'Show in Explorer' : 'Reveal in Finder' },
@@ -706,6 +712,7 @@ async function tabMenu(t) {
     { id: 'close', label: 'Close Tab' },
   ]);
   if (r === 'colour') { showTab(t.id); openThemes(); }
+  else if (r === 'fresh') freshStart(t);
   else if (r === 'rename') renameTab(t);
   else if (r && r.startsWith('move:')) {
     const other = r.slice(5);
@@ -856,9 +863,56 @@ function taskRow(t, { showSection = false } = {}) {
     <i class="st ${st === 'moving' ? 'idle' : st}"></i>
     <div class="t-main">
       <div class="t-top"><span class="t-name">${esc(sessLabel(t))}</span>${since ? `<time>${esc(ago(since))}</time>` : ''}</div>
-      <div class="t-sub"><i class="sw" style="--sw:${THEMES.get(t.theme).colors.background};--sw2:${THEMES.get(t.theme).colors.foreground}"></i>${showSection ? `<span class="tag sec ${t.section}">${LABEL[t.section]}</span>` : ''}<span class="tag">${esc(projectOf(t))}</span>${st === 'waiting' ? '' : `<span class="t-line">${esc(taskLine(t))}</span>`}</div>${st === 'waiting' ? `<div class="t-ask">${esc(taskLine(t))}</div>` : ''}
+      <div class="t-sub"><i class="sw" style="--sw:${THEMES.get(t.theme).colors.background};--sw2:${THEMES.get(t.theme).colors.foreground}"></i>${showSection ? `<span class="tag sec ${t.section}">${LABEL[t.section]}</span>` : ''}<span class="tag">${esc(projectOf(t))}</span>${ctxOf(t) ? `<span class="ctx ${ctxLevel(ctxOf(t))}" title="Context re-read on every step">${ctxLabel(ctxOf(t))}</span>` : ''}${st === 'waiting' ? '' : `<span class="t-line">${esc(taskLine(t))}</span>`}</div>${st === 'waiting' ? `<div class="t-ask">${esc(taskLine(t))}</div>` : ''}
     </div>
     <button class="x" data-act="close" title="Close">${ICON.x}</button></li>`;
+}
+
+// ------------------------------------------------------------------ context size & fresh start
+function ctxOf(t) { const p = t && panes.get(t.focus); return p?.claudeRunning && p.claudeSession ? ctxSizes[p.claudeSession]?.ctx || 0 : 0; }
+const ctxLevel = (n) => (n >= CTX_HIGH ? 'high' : n >= CTX_WARN ? 'warn' : 'ok');
+const ctxLabel = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : Math.round(n / 1000) + 'k');
+async function refreshContext() {
+  const ids = [...panes.values()].filter((p) => p.claudeRunning && p.claudeSession).map((p) => p.claudeSession);
+  if (!ids.length) return;
+  Object.assign(ctxSizes, await sb.contextSizes(ids));
+  $('#tree').dataset.html = '';
+  renderSidebar(); renderCrumb();
+}
+async function freshStart(t) {
+  const p = t && panes.get(t.focus);
+  if (!p?.claudeRunning) return toast('Fresh start works on a Claude session.');
+  if (p.state !== 'idle' && p.state !== 'done') return toast('Wait until Claude is ready, then try again.');
+  const n = ctxOf(t);
+  const ok = await confirmBox({
+    title: 'Fresh start?',
+    body: `This session re-reads ${n ? ctxLabel(n) + ' tokens' : 'its whole history'} on every step. Claude will write a short handoff note, then a new session picks up from that note and this one goes to the Archive (still resumable).`,
+    yes: 'Write handoff & restart',
+  });
+  if (!ok) return;
+  const slug = (sessLabel(t) || 'session').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'session';
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+  const note = `~/.claude/handoffs/${slug}-${stamp}.md`;
+  sb.write(p.id, `Please write a handoff note so this work can continue in a fresh session with a small context. Save it to ${note} (create the folder if needed). Include: the goal, what is done, the current state, decisions and rules we agreed, key files, paths and commands, open questions, and the exact next step. Under 500 words, plain markdown. When it is saved, reply only: HANDOFF READY\r`);
+  toast('Writing the handoff note…');
+  const started = Date.now();
+  const wait = async () => {
+    if (!panes.has(p.id)) return;
+    const ready = (await sb.exists(note)) && p.state !== 'working';
+    if (!ready) { if (Date.now() - started < 10 * 60000) setTimeout(wait, 2000); else toast('No handoff note yet — check the session.'); return; }
+    const tab = await openTab(t.section, { name: t.name, path: t.path }, { claude: true, agent: p.agent || null, cwd: p.path,
+      prompt: `Continue from the handoff note at ${note}. Read it first, then carry on with the next step, or ask me if anything is unclear.` });
+    tab.name = sessLabel(t); tab.named = true;
+    const old = tabs.find((x) => x.id === t.id);
+    if (old) {
+      cfg.archive = cfg.archive || [];
+      cfg.archive.unshift({ id: old.id, name: sessLabel(old) + ' (before fresh start)', section: old.section, path: old.path, cwd: p.path, project: projectOf(old), claudeSession: p.claudeSession, theme: old.theme, archivedAt: Date.now() });
+      closeTab(old.id);
+    }
+    persist(); renderSidebar();
+    toast('Fresh session started from the handoff note. The old one is in the Archive.');
+  };
+  setTimeout(wait, 3000);
 }
 
 function renderSidebar() {
@@ -1376,6 +1430,7 @@ function paletteSource() {
   SECTIONS.forEach((s, i) => { if (s !== active) cmd(`Switch to ${LABEL[s]}`, ICON.swap, () => setSection(s), `⌘${i + 1}`); });
   for (const a of agentList) cmd(`Start agent: ${a.name}`, ICON.spark, () => startAgent(a));
   const ct = currentTab();
+  if (ct && panes.get(ct.focus)?.claudeRunning) cmd('Fresh start this session (handoff note)', ICON.spark, () => freshStart(ct));
   if (typeof Deck !== 'undefined' && Deck.isAgentTab(ct)) cmd(Deck.on(ct) ? 'Show terminal for this agent' : 'Show agent view', ICON.prompt, () => Deck.flip(ct, Deck.on(ct)));
   cmd('New project', ICON.folder, () => addProject());
   cmd('Toggle sidebar', ICON.side, () => menuAction('toggle-sidebar'), '⌘B');
@@ -1689,6 +1744,7 @@ $('#empty-claude').addEventListener('click', () => openComposer());
 $('#new-task').addEventListener('click', () => openComposer());
 $('#archive-btn').addEventListener('click', () => archiveTask(currentTab()));
 $('#changes-btn').addEventListener('click', openDrawer);
+$('#fresh-btn').addEventListener('click', () => freshStart(currentTab()));
 $('#add').addEventListener('click', () => addProject());
 $('#home-shell').addEventListener('click', () => openTab(active, { name: 'Home', path: '~' }));
 $('#settings-btn').addEventListener('click', openSettings);
@@ -1792,6 +1848,7 @@ if (IS_WIN) {
   setInterval(() => { $('#tree').dataset.html = ''; renderSidebar(); renderCrumb(); }, 30000);
   setInterval(() => renderAttention(), 30000);
   refreshAgents(); setInterval(refreshAgents, 20000);
+  refreshContext(); setInterval(refreshContext, 8000);
   const portalStats = () => {
     const live = panes.size, claude = [...panes.values()].filter((p) => p.claudeRunning).length;
     const waiting = attentionList().length;
