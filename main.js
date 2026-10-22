@@ -449,7 +449,8 @@ const AGENTS_DIR = path.join(HOME, '.claude', 'agents');
 const AGENT_TAGS = { 'data-desk': 'Excel jobs, allocations, FINAL_DATA', 'design-critic': 'UI review + design library', 'device-runner': 'Builds on the tablet over adb',
   inbox: 'Your WhatsApp chats and files', ship: 'Deploy → verify → commit', 'wa-campaign': 'WhatsApp campaigns on Gupshup',
   'seqr-dev': 'seQRview engineering', 'seqr-drift': 'Prod vs repo drift (read-only)', 'seqr-setup': 'Master Excel check before upload',
-  'seqr-allocation': 'Allocation dry run + verifier', 'seqr-watch': 'Exam-day watch & alerts', 'seqr-logsweep': 'Daily log sweep', 'seqr-support': 'Help-request triage' };
+  'seqr-allocation': 'Allocation dry run + verifier', 'seqr-watch': 'Exam-day watch & alerts', 'seqr-logsweep': 'Daily log sweep', 'seqr-support': 'Help-request triage',
+  'creative-scout': 'Creative-tech news & open calls for you' };
 // One-click starting prompts on the Agents home screen.
 const AGENT_STARTERS = {
   'data-desk': ['Process the latest Excel I got on WhatsApp', 'Verify the website data against the latest master Excel', 'Run a new centre allocation — I\'ll give the exam details'],
@@ -465,10 +466,11 @@ const AGENT_STARTERS = {
   'seqr-watch': ['How is the live exam going?', 'Explain the latest alert'],
   'seqr-logsweep': ['Sweep the last 24h of logs and rank what needs fixing'],
   'seqr-support': ['Triage open help requests and draft replies'],
+  'creative-scout': ['Scan this week in creative tech', 'Find open calls and residencies I can apply to', 'What should I learn next for a creative-technologist role?'],
 };
 const AGENT_DIRS = { 'data-desk': '~/OTR', 'device-runner': '~/Projects/mobile-android', ship: '~/Projects/seqrview', inbox: '~/Inbox/WhatsApp',
   'seqr-dev': '~/Projects/seqrview', 'seqr-drift': '~/Projects/seqr-ops', 'seqr-setup': '~/Projects/seqr-ops', 'seqr-allocation': '~/Projects/seqr-ops',
-  'seqr-watch': '~/Projects/seqr-ops', 'seqr-logsweep': '~/Projects/seqr-ops', 'seqr-support': '~/Projects/seqr-ops' };
+  'seqr-watch': '~/Projects/seqr-ops', 'seqr-logsweep': '~/Projects/seqr-ops', 'seqr-support': '~/Projects/seqr-ops', 'creative-scout': '~/Scout/creative-tech' };
 function frontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   const out = {};
