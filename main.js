@@ -447,7 +447,9 @@ ipcMain.handle('config:get', () => loadConfig());
 const AGENTS_DIR = path.join(HOME, '.claude', 'agents');
 // One-line labels for the sidebar; agents without one show the start of their description.
 const AGENT_TAGS = { 'data-desk': 'Excel jobs, allocations, FINAL_DATA', 'design-critic': 'UI review + design library', 'device-runner': 'Builds on the tablet over adb',
-  inbox: 'Your WhatsApp chats and files', ship: 'Deploy → verify → commit', 'wa-campaign': 'WhatsApp campaigns on Gupshup' };
+  inbox: 'Your WhatsApp chats and files', ship: 'Deploy → verify → commit', 'wa-campaign': 'WhatsApp campaigns on Gupshup',
+  'seqr-dev': 'seQRview engineering', 'seqr-drift': 'Prod vs repo drift (read-only)', 'seqr-setup': 'Master Excel check before upload',
+  'seqr-allocation': 'Allocation dry run + verifier', 'seqr-watch': 'Exam-day watch & alerts', 'seqr-logsweep': 'Daily log sweep', 'seqr-support': 'Help-request triage' };
 // One-click starting prompts on the Agents home screen.
 const AGENT_STARTERS = {
   'data-desk': ['Process the latest Excel I got on WhatsApp', 'Verify the website data against the latest master Excel', 'Run a new centre allocation — I\'ll give the exam details'],
@@ -456,8 +458,17 @@ const AGENT_STARTERS = {
   inbox: ['What files did I get on WhatsApp today?', 'Find the latest Excel from the OTR group and file it'],
   ship: ['Deploy and verify what\'s uncommitted here', 'Commit my changes, one commit per change'],
   'wa-campaign': ['Plan a new WhatsApp campaign', 'Report replies for the running campaign by district'],
+  'seqr-dev': ['Explain how this part of seQRview works before I change it', 'Find why this endpoint is slow'],
+  'seqr-drift': ['Check prod drift before I deploy'],
+  'seqr-setup': ['Check the latest master Excel from WhatsApp before upload'],
+  'seqr-allocation': ['Dry-run the allocation for the next exam and report'],
+  'seqr-watch': ['How is the live exam going?', 'Explain the latest alert'],
+  'seqr-logsweep': ['Sweep the last 24h of logs and rank what needs fixing'],
+  'seqr-support': ['Triage open help requests and draft replies'],
 };
-const AGENT_DIRS = { 'data-desk': '~/OTR', 'device-runner': '~/Projects/mobile-android', ship: '~/Projects/seqrview', inbox: '~/Inbox/WhatsApp' };
+const AGENT_DIRS = { 'data-desk': '~/OTR', 'device-runner': '~/Projects/mobile-android', ship: '~/Projects/seqrview', inbox: '~/Inbox/WhatsApp',
+  'seqr-dev': '~/Projects/seqrview', 'seqr-drift': '~/Projects/seqr-ops', 'seqr-setup': '~/Projects/seqr-ops', 'seqr-allocation': '~/Projects/seqr-ops',
+  'seqr-watch': '~/Projects/seqr-ops', 'seqr-logsweep': '~/Projects/seqr-ops', 'seqr-support': '~/Projects/seqr-ops' };
 function frontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   const out = {};
