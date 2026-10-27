@@ -274,3 +274,9 @@ body[data-section='agents'] .st.working::before { border-top-color: #aaf0ce; bor
 .task.agent-def .t-line, .task.watcher .t-line { color: var(--text-3); }
 .task.watcher.err .t-line { color: var(--waiting); }
 .task.watcher.off .t-name { color: var(--text-2); }
+
+/* sidebar toggle: sits before the task name; shown dimmed until hovered */
+#side-btn { flex: none; margin-right: 2px; color: var(--text-3); }
+#side-btn:hover { color: var(--text); }
+body.no-sidebar #side-btn { color: var(--text-2); }
+#tabbar .tab-actions { margin-left: auto; }
