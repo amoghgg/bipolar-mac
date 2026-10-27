@@ -827,6 +827,7 @@ function setSection(s, { quiet = false } = {}) {
   const changed = active !== s;
   active = s;
   document.body.dataset.section = s;
+  sideBtnTitle();
   $$('#seg button').forEach((b) => b.classList.toggle('on', b.dataset.section === s));
   if (changed) {
     const ul = $('#tree');
@@ -1870,7 +1871,7 @@ $('#fresh-btn').addEventListener('click', () => freshStart(currentTab()));
 $('#add').addEventListener('click', () => addProject());
 $('#home-shell').addEventListener('click', () => openTab(active, { name: 'Home', path: '~' }));
 $('#settings-btn').addEventListener('click', openSettings);
-function sideBtnTitle() { $('#side-btn').title = keyLabel(document.body.classList.contains('no-sidebar') ? 'Show sidebar (⌘B)' : 'Hide sidebar (⌘B)'); }
+function sideBtnTitle() { $('#side-btn').title = `${LABEL[active]} · ` + keyLabel(document.body.classList.contains('no-sidebar') ? 'Show sidebar (⌘B)' : 'Hide sidebar (⌘B)'); $('#sec-l').textContent = LABEL[active][0]; }
 $('#side-btn').addEventListener('click', () => menuAction('toggle-sidebar'));
 $('#new-tab').addEventListener('click', () => menuAction('new-tab'));
 $('#close-btn').addEventListener('click', () => menuAction('close-tab'));
