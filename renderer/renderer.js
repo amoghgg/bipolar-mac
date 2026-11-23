@@ -833,6 +833,8 @@ function setSection(s, { quiet = false } = {}) {
   if (changed) {
     const ul = $('#tree');
     ul.classList.remove('stagger'); void ul.offsetWidth; ul.classList.add('stagger');
+    // Rows slide in once on a section switch, never again on later updates.
+    clearTimeout(ul._stagger); ul._stagger = setTimeout(() => ul.classList.remove('stagger'), 900);
   }
   renderProjects();
   if (s === 'agents' && changed) refreshAgents();
@@ -988,10 +990,37 @@ function renderSidebar() {
     + group('shells', 'Shells', shells, { foldable: true })
     + group('archive', 'Archive', archived, { foldable: true, archive: true });
   if (!mine.length && !needs.length && !roster) html = `<li class="hint-row">No tasks in ${LABEL[active]} yet. Start one with ${keyLabel('⌘N')}.</li>` + html;
-  if (ul.dataset.html !== html) { ul.innerHTML = html; ul.dataset.html = html; }
+  if (ul.dataset.html !== html) { patchList(ul, html); ul.dataset.html = html; }
   for (const s of SECTIONS) {
     $(`#seg button[data-section="${s}"]`).classList.toggle('alert', s !== active && needs.some((t) => t.section === s));
   }
+}
+// Update the list in place: rows are matched by task / agent / watcher, and only the text and
+// attributes that changed are touched. Rebuilding it whole every few seconds (a timer ticking,
+// a status line changing) restarted every spinner and dropped the hover.
+const rowKey = (n) => n.dataset.tab ? 't' + n.dataset.tab : n.dataset.agent ? 'a' + n.dataset.agent
+  : n.dataset.watch ? 'w' + n.dataset.watch : n.classList.contains('grp') ? 'g' + n.classList[1] : 'h' + n.outerHTML;
+function morph(from, to) {
+  if (from.nodeType !== to.nodeType || from.nodeName !== to.nodeName) return from.replaceWith(to);
+  if (from.nodeType !== 1) { if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue; return; }
+  for (const a of [...from.attributes]) if (!to.hasAttribute(a.name)) from.removeAttribute(a.name);
+  for (const a of to.attributes) if (from.getAttribute(a.name) !== a.value) from.setAttribute(a.name, a.value);
+  const was = [...from.childNodes], now = [...to.childNodes];
+  now.forEach((n, i) => (was[i] ? morph(was[i], n) : from.appendChild(n)));
+  for (const n of was.slice(now.length)) n.remove();
+}
+function patchList(ul, html) {
+  const next = document.createElement('ul');
+  next.innerHTML = html;
+  const old = new Map([...ul.children].map((n) => [rowKey(n), n]));
+  let at = ul.firstElementChild;
+  for (const n of [...next.children]) {
+    const k = rowKey(n), keep = old.get(k);
+    old.delete(k);
+    if (keep) { morph(keep, n); if (keep !== at) ul.insertBefore(keep, at); else at = at.nextElementSibling; }
+    else ul.insertBefore(n, at);
+  }
+  for (const n of old.values()) n.remove();
 }
 // ------------------------------------------------------------------ sidebar: agents & watchers
 // The Agents section lists the subagents in ~/.claude/agents (click to talk to one directly;
