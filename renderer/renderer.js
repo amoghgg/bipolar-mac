@@ -1280,7 +1280,7 @@ $('#th-auto').addEventListener('change', (e) => { cfg.ui.autoPastel = e.target.c
 $('#theme-btn').addEventListener('click', openThemes);
 
 // ------------------------------------------------------------------ archive
-async function archiveTask(t) {
+async function archiveTask(t, { quiet = false } = {}) {
   if (!t) return;
   const p = panes.get(t.focus);
   if (p?.claudeRunning && p.state === 'working') {
@@ -1293,7 +1293,17 @@ async function archiveTask(t) {
     cfg.archive = cfg.archive.slice(0, 60);
   }
   closeTab(t.id);
-  toast('Archived. Resume it any time from the Archive.');
+  if (!quiet) toast('Archived. Resume it any time from the Archive.');
+}
+// Old conversations from a fresh start belong in the Archive. One that's open (reopened from the
+// Archive, often by a stray click) goes back on its own once you're not looking at it and Claude
+// isn't busy in it.
+const FRESH_OLD = / \(before fresh start\)$/;
+function tidyFreshStarts() {
+  const back = tabs.filter((t) => FRESH_OLD.test(t.name || '') && !(t.section === active && t.id === current[active])
+    && !leaves(t.root).some((id) => ['working', 'waiting'].includes(panes.get(id)?.state)));
+  for (const t of back) archiveTask(t, { quiet: true });
+  if (back.length) toast(back.length === 1 ? `“${back[0].name}” went back to the Archive.` : `${back.length} old fresh-start chats went back to the Archive.`);
 }
 async function resumeArchived(id) {
   const i = (cfg.archive || []).findIndex((x) => x.id === id);
@@ -2035,6 +2045,7 @@ if (IS_WIN) {
   setInterval(() => { $('#tree').dataset.html = ''; renderSidebar(); renderCrumb(); }, 30000);
   setInterval(() => renderAttention(), 30000);
   refreshAgents(); setInterval(refreshAgents, 20000);
+  setTimeout(tidyFreshStarts, 5000); setInterval(tidyFreshStarts, 60000);
   refreshContext(); setInterval(refreshContext, 8000);
   const portalStats = () => {
     const live = panes.size, claude = [...panes.values()].filter((p) => p.claudeRunning).length;
